@@ -1,0 +1,142 @@
+/* Variables personnalisables */
+:root {
+    --primary-color: #4CAF50;
+    --secondary-color: #FF9800;
+    --danger-color: #F44336;
+    --warning-color: #FFC107;
+    --info-color: #2196F3;
+    --yesh-color-bleu:#2e2a80;
+    --yesh-color-bleu2:#29285e;
+    --yesh-color-red:#f21a23;
+    --yesh-color-red2:#d72130;
+    --text-color: #333333;
+    --background-color: #f5f5f5;
+    
+    /* Polices personnalisables */
+    --main-font: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    --title-font: 'Arial', sans-serif;
+    --data-font: 'Consolas', 'Monaco', monospace;
+    
+    /* Tailles de police */
+    --title-size: 1.8rem;
+    --subtitle-size: 1.3rem;
+    --body-size: 1rem;
+    --small-size: 0.875rem;
+}
+
+/* Styles généraux */
+body {
+    font-family: var(--main-font);
+    color: var(--text-color);
+    background-color: var(--background-color);
+    margin: 0;
+    padding: 0;
+}
+
+/* Style pour centrer tout le texte du tableau */
+table th {
+    text-align: center !important;
+    vertical-align: middle !important;
+    font-weight: 600;
+    background-color: #f8f9fa;
+}
+
+table td {
+    text-align: center !important;
+    vertical-align: middle !important;
+}
+
+/* Style pour le bouton de retour */
+.stButton button[kind="secondary"] {
+    background-color: #2e2a80;
+    color: white;
+    border: none;
+    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+    font-size: 1.5rem;
+    font-weight: bold;
+}
+
+.stButton button[kind="secondary"]:hover {
+    background-color: #2e2a80;
+    color: white;
+}
+
+/* Style pour les boutons de navigation */
+.stButton button {
+    font-size: 1.2rem;
+    padding: 5px 10px;
+}
+
+/* Style pour le bouton d'export */
+.stDownloadButton > button {
+    background-color: var(--yesh-color-red2);
+    color: white;
+    font-family: var(--main-font);
+    font-weight: 500;
+    margin-top: 1.5rem;
+}
+
+.stDownloadButton > button:hover {
+    background-color:#d72130;
+}
+
+/* Cacher la barre latérale */
+[data-testid="stSidebar"] {
+    display: none;
+}
+
+/* Amélioration des sélecteurs */
+.stSelectbox > div > div {
+    font-family: var(--main-font);
+    font-size: var(--body-size);
+}
+
+/* Pagination */
+.stButton > button[disabled] {
+    background-color: #cccccc;
+    color: #666666;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
+/* Messages d'information */
+.stAlert {
+    font-family: var(--main-font);
+    border-radius: 6px;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    :root {
+        --title-size: 1.5rem;
+        --subtitle-size: 1.1rem;
+        --body-size: 0.9rem;
+    }
+}
+
+
+/* NOUVEAU BLOC POUR ENCADRER LE CONTENU ANALYSE.PY (COPIE DE .analyze-card) */
+
+/* Cible le div interne du st.container qui contient l'ID #analyze-frame */
+#analyze-frame > div {
+    /* Reprise des styles de .analyze-card pour le conteneur */
+    background: linear-gradient(135deg, #ffffff, #f8f9fa);
+    border-radius: 20px;
+    padding: 50px 40px;
+    text-align: center;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+    border: 2px solid #e9ecef;
+    margin: 20px auto;
+    max-width: 600px;
+}
+
+/* Ajustement de la marge pour le texte d'instruction, car st.button suit immédiatement */
+/* (Ceci est déjà défini dans analyse.py mais c'est bien de le confirmer ici) */
+.analyze-instruction {
+    margin-bottom: 40px; 
+    text-align: center;
+}
+
