@@ -1,3 +1,4 @@
 [client]
-# Masque la barre d'outils supérieure (y compris Stop, Deploy, et l'icône de l'utilisateur)
-toolbarMode = "viewer"git
+# Masque la barre d'outils supérieure (y compris Stop,
+# Deploy, et l'icône de l'utilisateur)
+toolbarMode = "viewer"
