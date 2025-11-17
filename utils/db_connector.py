@@ -31,7 +31,7 @@ def load_data_for_analysis():
             FTP.FactKey,
             FTP.TicketID,
             FTP.AssigneeEmployeeKey,
-            FTP.AssigneeFullName,  -- ← UTILISER AssigneeFullName DIRECTEMENT de FactTicketPerformance
+            FTP.AssigneeFullName,
             FTP.ProblemDescription,
             FTP.SolutionContent,
             FTP.ResolutionDurationSec,
@@ -41,7 +41,7 @@ def load_data_for_analysis():
         WHERE FTP.ProblemDescription IS NOT NULL 
           AND FTP.SolutionContent IS NOT NULL
           AND FTP.ResolutionDurationSec IS NOT NULL
-          AND FTP.AssigneeFullName IS NOT NULL  -- ← CONDITION CORRIGÉE
+          AND FTP.AssigneeFullName IS NOT NULL
         ORDER BY DD.FullDate DESC
         """)
         
@@ -64,11 +64,11 @@ def save_analysis_results(df_anomalies, cluster_results=None):
     try:
         engine = create_engine(get_db_connection_url())
         
-        #VIDER LES TABLES AVANT NOUVELLE ANALYSE
+        # VIDER LES TABLES AVANT NOUVELLE ANALYSE
         with engine.connect() as conn:
             conn.execute(text("DELETE FROM FactAnomaliesDetail"))
             conn.execute(text("DELETE FROM DimRecurrentProblems"))
-            print("✅ Anciennes données supprimées")
+            print("Anciennes données supprimées")
         
         # 1. Sauvegarde dans FactAnomaliesDetail
         if not df_anomalies.empty:
@@ -99,30 +99,30 @@ def save_analysis_results(df_anomalies, cluster_results=None):
                 'AnomalyDescription': 'Aucune description'
             })
             
-            #INSERTION DIRECTE (plus de vérification de doublons)
+            # INSERTION DIRECTE
             anomalies_to_save.to_sql(
                 'FactAnomaliesDetail', 
                 engine, 
                 if_exists='append', 
                 index=False
             )
-            print(f"✅ {len(anomalies_to_save)} anomalies sauvegardées dans FactAnomaliesDetail")
+            print(f"{len(anomalies_to_save)} anomalies sauvegardées dans FactAnomaliesDetail")
         
-        #Sauvegarde des clusters dans DimRecurrentProblems
+        # 2. Sauvegarde des clusters dans DimRecurrentProblems
         if cluster_results is not None and not cluster_results.empty:
             # Préparer les données des clusters
             clusters_to_save = cluster_results[[
                 'ProblemNameGroup', 'ClusterID', 'KeywordMatch', 'RecurrenceCount'
             ]].copy()
             
-            #INSERTION DIRECTE
+            # INSERTION DIRECTE
             clusters_to_save.to_sql(
                 'DimRecurrentProblems', 
                 engine, 
                 if_exists='append', 
                 index=False
             )
-            print(f"✅ {len(clusters_to_save)} problèmes récurrents sauvegardés dans DimRecurrentProblems")
+            print(f"{len(clusters_to_save)} problèmes récurrents sauvegardés dans DimRecurrentProblems")
         
         return True
         
