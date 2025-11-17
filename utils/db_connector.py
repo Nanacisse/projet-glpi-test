@@ -31,17 +31,18 @@ def load_data_for_analysis():
             FTP.FactKey,
             FTP.TicketID,
             FTP.AssigneeEmployeeKey,
-            FTP.AssigneeFullName,  -- ← CORRECTION ICI : pris directement de FTP
+            DE.Username AS AssigneeFullName,  -- ← UTILISER Username DE DimEmployee
             FTP.ProblemDescription,
             FTP.SolutionContent,
             FTP.ResolutionDurationSec,
             DD.FullDate AS DateCreation
         FROM FactTicketPerformance FTP
-        JOIN DimDate DD ON FTP.DateCreationKey = DD.DateKey  -- ← CORRECTION : plus de jointure avec DimEmployee
+        JOIN DimEmployee DE ON FTP.AssigneeEmployeeKey = DE.EmployeeKey  -- ← JOINTURE RÉTABLIE
+        JOIN DimDate DD ON FTP.DateCreationKey = DD.DateKey
         WHERE FTP.ProblemDescription IS NOT NULL 
           AND FTP.SolutionContent IS NOT NULL
           AND FTP.ResolutionDurationSec IS NOT NULL
-          AND FTP.AssigneeFullName IS NOT NULL  -- ← CORRECTION ICI
+          AND DE.Username IS NOT NULL  -- ← CONDITION CORRIGÉE
         ORDER BY DD.FullDate DESC
         """)
         
@@ -64,7 +65,7 @@ def save_analysis_results(df_anomalies, cluster_results=None):
     try:
         engine = create_engine(get_db_connection_url())
         
-        #Sauvegarde dans FactAnomaliesDetail
+        # 1. Sauvegarde dans FactAnomaliesDetail
         if not df_anomalies.empty:
             # Vérifier que FactKey existe
             if 'FactKey' not in df_anomalies.columns:
@@ -113,7 +114,7 @@ def save_analysis_results(df_anomalies, cluster_results=None):
                 )
                 print(f"{len(nouvelles_anomalies)} anomalies sauvegardées dans FactAnomaliesDetail")
         
-        #Sauvegarde des clusters dans DimRecurrentProblems
+        # 2. Sauvegarde des clusters dans DimRecurrentProblems
         if cluster_results is not None and not cluster_results.empty:
             # Préparer les données des clusters
             clusters_to_save = cluster_results[[
