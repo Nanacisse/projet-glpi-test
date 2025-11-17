@@ -6,7 +6,7 @@ from sklearn.cluster import AgglomerativeClustering
 from sentence_transformers import SentenceTransformer
 import re
 
-# --- Initialisation des ressources IA/NLP ---
+#Initialisation des ressources IA/NLP
 try:
     nlp = spacy.load("fr_core_news_sm")
     st_model = SentenceTransformer('paraphrase-multilingual-mpnet-base-v2')
@@ -15,7 +15,7 @@ except Exception as e:
     nlp = None
     st_model = None
 
-# Définition des constantes d'anomalie
+#Définition des constantes d'anomalie
 SEMAN_THRESHOLD = 0.60  # 60%
 CONC_THRESHOLD = 0.40   # 40%
 Z_SCORE_THRESHOLD = 2   # |Z| > 2
@@ -30,33 +30,33 @@ def calculate_semantique_score(text):
         if len(text_str) == 0:
             return 0.0
         
-        # Vérifier si spaCy est disponible
+        #Vérifier si spaCy est disponible
         if not nlp:
             return 50.0
             
         doc = nlp(text_str)
         
-        # Métriques de qualité sémantique
+        #Métriques de qualité sémantique
         total_tokens = len(doc)
         if total_tokens == 0:
             return 0.0
         
-        # 1. Score basé sur la longueur (0-40 points)
+        #Score basé sur la longueur (0-40 points)
         length_score = min(40, total_tokens * 2)
         
-        # 2. Score basé sur les phrases (0-30 points)
+        #Score basé sur les phrases (0-30 points)
         sentences = list(doc.sents)
         num_sentences = len(sentences)
         structure_score = min(30, num_sentences * 10)
         
-        # 3. Score basé sur les mots non-stop (0-30 points)
+        #Score basé sur les mots non-stop (0-30 points)
         non_stop_words = [token for token in doc if token.is_alpha and not token.is_stop]
         lexical_score = min(30, len(non_stop_words) * 2)
         
-        # Score total simple
+        #Score total simple
         total_score = length_score + structure_score + lexical_score
         
-        # Ajustement pour rester dans 0-100
+        #Ajustement pour rester dans 0-100
         final_score = min(100, total_score)
         
         return round(final_score, 2)
@@ -76,18 +76,18 @@ def calculate_concordance_score(problem, solution):
         if not problem_str or not solution_str:
             return 0.0
         
-        # 1. Similarité basique (SequenceMatcher)
+        #Similarité basique (SequenceMatcher)
         matcher = SequenceMatcher(None, problem_str, solution_str)
         base_similarity = matcher.ratio() * 40
         
-        # 2. Présence de mots-clés de résolution
+        #Présence de mots-clés de résolution-je vais en ajouter d'autre après validation
         resolution_keywords = ['résolu', 'corrigé', 'réparé', 'fixé', 'solution', 
                               'résolution', 'terminé', 'complété', 'réussi']
         
         resolution_found = any(keyword in solution_str for keyword in resolution_keywords)
         resolution_score = 20 if resolution_found else 0
         
-        # 3. Longueur relative de la solution
+        #Longueur relative de la solution
         problem_words = len(problem_str.split())
         solution_words = len(solution_str.split())
         
@@ -97,11 +97,11 @@ def calculate_concordance_score(problem, solution):
         else:
             length_score = 0
         
-        # 4. Structure de la solution
+        #Structure de la solution
         solution_has_steps = any(marker in solution_str for marker in ['premièrement', 'ensuite', 'puis', 'étape', 'step'])
         structure_score = 10 if solution_has_steps else 5
         
-        # 5. Présence d'indicateurs de complétion
+        # Présence d'indicateurs de complétion
         completion_indicators = any(marker in solution_str for marker in ['terminé', 'fini', 'complété', 'finalisé'])
         completion_score = 10 if completion_indicators else 0
         
@@ -116,17 +116,17 @@ def calculate_temporal_score(df):
     if df.empty:
         return df
         
-    # Calcul des statistiques temporelles
+    #Calcul des statistiques temporelles
     mean_h = df['TempsHeures'].mean()
     std_h = df['TempsHeures'].std()
     
     df['TempsMoyenHeures'] = round(mean_h, 2)
     df['EcartTypeHeures'] = round(std_h if std_h > 0 else 1.0, 2)
     
-    # Calcul du Z-score
+    #Calcul du Z-score
     df['ScoreTemporel'] = (df['TempsHeures'] - mean_h) / df['EcartTypeHeures']
     
-    # Détection d'anomalie temporelle
+    #Détection d'anomalie temporelle
     df['AnomalieTemporelle'] = np.where(np.abs(df['ScoreTemporel']) > Z_SCORE_THRESHOLD, 'Oui', 'Non')
     
     return df
@@ -137,7 +137,7 @@ def determine_final_status(row):
     conc_ok = row['ScoreConcordance'] >= CONC_THRESHOLD * 100
     temp_ok = row['AnomalieTemporelle'] == 'Non'
     
-    # Logique des statuts
+    #Logique des statuts
     if sem_ok and conc_ok and temp_ok:
         return 'OK'
     elif sem_ok and conc_ok and not temp_ok:
@@ -147,7 +147,7 @@ def determine_final_status(row):
     elif not sem_ok and conc_ok and temp_ok:
         return 'Anomalie Sémantique'
     
-    # Cas d'anomalies multiples
+    #Cas d'anomalies multiples
     num_anomalies = sum([not sem_ok, not conc_ok, not temp_ok])
     
     if num_anomalies >= 2:
@@ -195,31 +195,31 @@ def run_full_analysis(df):
     if df.empty:
         return df, None
     
-    print(f"🔧 Début de l'analyse sur {len(df)} tickets assignés")
+    print(f"Début de l'analyse sur {len(df)} tickets assignés")
     
-    # Vérifier que FactKey existe
+    #Vérifier que FactKey existe
     if 'FactKey' not in df.columns:
         df['FactKey'] = df.index
     
-    # 1. Analyse Sémantique
+    #Analyse Sémantique
     df['ScoreSemantique'] = df['SolutionContent'].apply(calculate_semantique_score)
     
-    # 2. Analyse de Concordance
+    #Analyse de Concordance
     df['ScoreConcordance'] = df.apply(
         lambda row: calculate_concordance_score(row['ProblemDescription'], row['SolutionContent']),
         axis=1
     )
     
-    # 3. Analyse Temporelle
+    #Analyse Temporelle
     df = calculate_temporal_score(df.copy())
     
-    # 4. Détermination du Statut Final
+    #Détermination du Statut Final
     df['Statut'] = df.apply(determine_final_status, axis=1)
     
-    # 5. Calcul de la Note de Ticket
+    #Calcul de la Note de Ticket
     df['TicketNote'] = df.apply(calculate_ticket_note, axis=1)
     
-    # 6. Calcul de la Moyenne Employé
+    #Calcul de la Moyenne Employé
     if 'AssigneeEmployeeKey' in df.columns:
         employee_avg = df.groupby('AssigneeEmployeeKey')['TicketNote'].mean().round(2)
         df['EmployeeAvgScore'] = df['AssigneeEmployeeKey'].map(employee_avg)
@@ -227,10 +227,10 @@ def run_full_analysis(df):
     else:
         df['EmployeeAvgScore'] = df['TicketNote']
     
-    # 7. Génération de la description d'anomalie
+    #Génération de la description d'anomalie
     df['AnomalyDescription'] = df.apply(generate_anomaly_description, axis=1)
     
-    # 8. Clustering pour problèmes récurrents
+    #Clustering pour problèmes récurrents
     cluster_results = None
     if st_model is not None and 'ProblemDescription' in df.columns:
         try:
@@ -265,5 +265,5 @@ def run_full_analysis(df):
             df['ClusterID'] = 0
             cluster_results = None
 
-    print(f"✅ Analyse terminée: {len(df)} tickets analysés")
+    print(f"Analyse terminée: {len(df)} tickets analysés")
     return df, cluster_results

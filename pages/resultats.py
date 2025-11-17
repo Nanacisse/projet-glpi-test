@@ -165,11 +165,11 @@ def render():
     </div>
     """, unsafe_allow_html=True)
 
-    # --- FILTRES ET EXPORT SUR LA MÊME LIGNE ---
+    #Filtre et lee bouton export sur la même ligne
     col1, col2, col3, col4 = st.columns([0.23, 0.23, 0.23, 0.31])
     
     with col1:
-        # Filtre par nom d'employé
+        #Filtre par nom d'employé
         if 'Nom Employé' in df_display_final.columns:
             employes = ['Tous'] + sorted(df_display_final['Nom Employé'].unique().tolist())
             employe_filtre = st.selectbox("Nom employé", employes)
@@ -177,12 +177,12 @@ def render():
             employe_filtre = 'Tous'
     
     with col2:
-        # Filtre par type d'anomalie
+        #Filtre par type d'anomalie
         types_anomalie = ['Tous'] + sorted(df_data['Statut'].unique().tolist())
         type_filtre = st.selectbox("Type d'anomalie", types_anomalie)
     
     with col3:
-        # Filtre par date
+        #Filtre par date
         if 'DateCreation' in df_data.columns:
             dates = pd.to_datetime(df_data['DateCreation']).dt.date
             min_date = dates.min()
@@ -196,30 +196,30 @@ def render():
         else:
             date_filtre = None
 
-    # APPLICATION DES FILTRES AVANT L'EXPORT
+    #Application des filtres avant l'export
     df_filtre = df_data.copy()
     
-    # Filtre employé
+    #Filtre employé
     if employe_filtre != 'Tous' and 'AssigneeFullName' in df_filtre.columns:
         df_filtre = df_filtre[df_filtre['AssigneeFullName'] == employe_filtre]
     
-    # Filtre type anomalie
+    #Filtre type anomalie
     if type_filtre != 'Tous':
         df_filtre = df_filtre[df_filtre['Statut'] == type_filtre]
     
-    # Filtre date
+    #Filtre date
     if date_filtre and 'DateCreation' in df_filtre.columns:
         df_filtre = df_filtre[pd.to_datetime(df_filtre['DateCreation']).dt.date == date_filtre]
     
-    # Mise à jour de df_display avec les filtres
+    #Mise à jour de df_display avec les filtres
     df_display_filtre = df_display_final.loc[df_filtre.index] if not df_filtre.empty else df_display_final
 
     with col4:
-        # Sous-colonnes pour selectbox et bouton d'export
+        #Sous-colonnes pour selectbox et bouton d'export
         export_col1, export_col2 = st.columns([0.6, 0.4])
         
         with export_col1:
-            # Menu déroulant pour l'export
+            #Menu déroulant pour l'export
             export_format = st.selectbox(
                 'Format',
                 ['CSV', 'Excel', 'PDF'] if HAS_FPDF and HAS_OPENPYXL else ['CSV'],
@@ -228,7 +228,7 @@ def render():
             )
         
         with export_col2:
-            # Bouton d'export
+            #Bouton d'export
             download_data = None
             mime_type = 'application/octet-stream'
             file_name = f"anomalies_glpi_{datetime.now().strftime('%Y%m%d_%H%M')}.{export_format.lower()}"
@@ -262,20 +262,20 @@ def render():
             except Exception as e:
                 st.error(f"Erreur export {export_format}: {str(e)}")
 
-    # --- AFFICHAGE DU TABLEAU ---
+    #Affichage du tableau
     if not df_display_filtre.empty:
-        # Gestion de la pagination
+        #Gestion de la pagination
         LINES_PER_PAGE = 50
         total_lines = len(df_display_filtre)
         total_pages = max(1, (total_lines + LINES_PER_PAGE - 1) // LINES_PER_PAGE)
         current_page = st.session_state.get('pagination_offset', 0)
         
-        # Calcul des indices pour la page courante
+        #Calcul des indices pour la page courante
         start_index = current_page * LINES_PER_PAGE
         end_index = min(start_index + LINES_PER_PAGE, total_lines)
         df_page = df_display_filtre.iloc[start_index:end_index]
         
-        # Appliquer le style CSS pour centrer l'en-tête du tableau
+        #Appliquer le style CSS pour centrer l'en-tête du tableau
         st.markdown("""
         <style>
         table th {
@@ -291,10 +291,10 @@ def render():
         </style>
         """, unsafe_allow_html=True)
         
-        # Afficher le tableau avec le style HTML pour les icônes
+        #Afficher le tableau avec le style HTML pour les icônes
         st.markdown(df_page.to_html(escape=False, index=False), unsafe_allow_html=True)
         
-        # Navigation simplifiée avec seulement les flèches
+        #Navigation simplifiée avec seulement les flèches
         nav_col1, nav_col2, nav_col3 = st.columns([1, 2, 1])
 
         with nav_col1:
