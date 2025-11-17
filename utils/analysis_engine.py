@@ -22,13 +22,17 @@ Z_SCORE_THRESHOLD = 2   # |Z| > 2
 
 def calculate_semantique_score(text):
     """Calcule le score sémantique pour les descriptions de SOLUTIONS (employés)."""
-    if not nlp or pd.isna(text):
+    if pd.isna(text) or text is None:
         return 0.0
     
     try:
-        text_str = str(text)
-        if len(text_str.strip()) == 0:
+        text_str = str(text).strip()
+        if len(text_str) == 0:
             return 0.0
+        
+        # Vérifier si spaCy est disponible
+        if not nlp:
+            return 50.0
             
         doc = nlp(text_str)
         
@@ -37,53 +41,27 @@ def calculate_semantique_score(text):
         if total_tokens == 0:
             return 0.0
         
-        # 1. Longueur appropriée
-        length_score = min(20, total_tokens * 0.5)
+        # 1. Score basé sur la longueur (0-40 points)
+        length_score = min(40, total_tokens * 2)
         
-        # 2. Structure (présence de phrases complètes)
+        # 2. Score basé sur les phrases (0-30 points)
         sentences = list(doc.sents)
         num_sentences = len(sentences)
-        structure_score = min(15, num_sentences * 3)
+        structure_score = min(30, num_sentences * 10)
         
-        # 3. Richesse lexicale
+        # 3. Score basé sur les mots non-stop (0-30 points)
         non_stop_words = [token for token in doc if token.is_alpha and not token.is_stop]
-        lexical_richness = len(non_stop_words) / total_tokens if total_tokens > 0 else 0
-        richness_score = lexical_richness * 30
+        lexical_score = min(30, len(non_stop_words) * 2)
         
-        # 4. Cohérence technique
-        technical_terms = ['erreur', 'bug', 'problème', 'solution', 'correct', 
-                          'réparer', 'installer', 'configurer', 'résoudre', 'dépanner',
-                          'incident', 'panne', 'dysfonctionnement', 'technique',
-                          'redémarrer', 'remplacer', 'réinstaller', 'configurer', 'réparé']
+        # Score total simple
+        total_score = length_score + structure_score + lexical_score
         
-        technical_count = sum(1 for token in doc if token.text.lower() in technical_terms)
-        technical_score = min(20, technical_count * 2)
+        # Ajustement pour rester dans 0-100
+        final_score = min(100, total_score)
         
-        # 5. Clarté (faible proportion de mots vides)
-        stop_word_ratio = sum(1 for token in doc if token.is_stop) / total_tokens
-        clarity_score = (1 - stop_word_ratio) * 15
-        
-        # Score total
-        total_score = length_score + structure_score + richness_score + technical_score + clarity_score
-        
-        # Pénalités
-        penalties = 0
-        
-        # Pénalité pour mots inconnus
-        unknown_words = sum(1 for token in doc if token.is_oov and token.is_alpha)
-        penalties += min(10, unknown_words * 2)
-        
-        # Pénalité pour phrases trop longues
-        if sentences:
-            avg_sentence_length = total_tokens / len(sentences)
-            if avg_sentence_length > 25:
-                penalties += 10
-        
-        final_score = max(0, min(100, total_score - penalties))
         return round(final_score, 2)
         
     except Exception as e:
-        print(f"Erreur analyse sémantique: {e}")
         return 50.0
 
 def calculate_concordance_score(problem, solution):
@@ -131,7 +109,6 @@ def calculate_concordance_score(problem, solution):
         return min(100, round(total_score, 2))
         
     except Exception as e:
-        print(f"Erreur calcul concordance: {e}")
         return 50.0
 
 def calculate_temporal_score(df):
@@ -216,34 +193,27 @@ def generate_anomaly_description(row):
 def run_full_analysis(df):
     """Exécute l'intégralité du pipeline d'analyse IA."""
     if df.empty:
-        print("❌ DataFrame vide fourni à l'analyse")
         return df, None
     
-    print(f"Début de l'analyse sur {len(df)} tickets assignés")
-    print(f"Colonnes disponibles: {df.columns.tolist()}")
+    print(f"🔧 Début de l'analyse sur {len(df)} tickets assignés")
     
-    # VÉRIFICATION CRITIQUE : S'assurer que FactKey existe
+    # Vérifier que FactKey existe
     if 'FactKey' not in df.columns:
-        print("FactKey manquant, création d'une clé temporaire")
         df['FactKey'] = df.index
     
-    # 1. Analyse Sémantique - MAINTENANT SUR SolutionContent (employés)
-    print("Début analyse sémantique des SOLUTIONS...")
+    # 1. Analyse Sémantique
     df['ScoreSemantique'] = df['SolutionContent'].apply(calculate_semantique_score)
     
     # 2. Analyse de Concordance
-    print("Début analyse concordance...")
     df['ScoreConcordance'] = df.apply(
         lambda row: calculate_concordance_score(row['ProblemDescription'], row['SolutionContent']),
         axis=1
     )
     
     # 3. Analyse Temporelle
-    print("Début analyse temporelle...")
     df = calculate_temporal_score(df.copy())
     
     # 4. Détermination du Statut Final
-    print("Détermination des statuts...")
     df['Statut'] = df.apply(determine_final_status, axis=1)
     
     # 5. Calcul de la Note de Ticket
@@ -260,17 +230,10 @@ def run_full_analysis(df):
     # 7. Génération de la description d'anomalie
     df['AnomalyDescription'] = df.apply(generate_anomaly_description, axis=1)
     
-    # DEBUG: Afficher un échantillon des résultats
-    print("ÉCHANTILLON DES RÉSULTATS:")
-    sample_cols = ['TicketID', 'ScoreSemantique', 'ScoreConcordance', 'ScoreTemporel', 'Statut', 'TicketNote']
-    available_cols = [col for col in sample_cols if col in df.columns]
-    print(df[available_cols].head(3))
-    
-    # 8. Clustering pour problèmes récurrents (reste sur ProblemDescription pour regroupement)
+    # 8. Clustering pour problèmes récurrents
     cluster_results = None
     if st_model is not None and 'ProblemDescription' in df.columns:
         try:
-            print("Début clustering des PROBLÈMES...")
             descriptions = df['ProblemDescription'].astype(str).tolist()
             if descriptions:
                 embeddings = st_model.encode(descriptions, show_progress_bar=False)
@@ -285,9 +248,8 @@ def run_full_analysis(df):
                 for cluster_id in range(n_clusters):
                     cluster_descriptions = df[df['ClusterID'] == cluster_id]['ProblemDescription'].tolist()
                     if cluster_descriptions:
-                        # Extraire les mots-clés communs
                         sample_description = cluster_descriptions[0]
-                        words = sample_description.split()[:5]  # Premiers mots comme mots-clés
+                        words = sample_description.split()[:5]
                         keywords = " ".join(words)
                         
                         cluster_data.append({
@@ -298,15 +260,10 @@ def run_full_analysis(df):
                         })
                 
                 cluster_results = pd.DataFrame(cluster_data)
-                print(f"Clustering terminé: {n_clusters} clusters identifiés")
-                print(f"Résultats clusters: {cluster_results}")
                 
         except Exception as e:
-            print(f"❌ Erreur clustering: {e}")
             df['ClusterID'] = 0
             cluster_results = None
-    else:
-        print("❌ Modèle de clustering non disponible")
 
-    print(f"Analyse terminée: {len(df)} tickets analysés")
+    print(f"✅ Analyse terminée: {len(df)} tickets analysés")
     return df, cluster_results

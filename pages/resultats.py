@@ -93,10 +93,7 @@ def render():
         st.warning("⚠️ Aucune donnée d'anomalie disponible. Veuillez lancer l'analyse d'abord.")
         return
     
-    # DEBUG: Afficher les colonnes disponibles pour le diagnostic
-    print(f"🔍 Colonnes disponibles dans df_data: {df_data.columns.tolist()}")
-    
-    # Préparer les données pour l'affichage selon votre structure demandée
+    # Préparer les données pour l'affichage
     df_display = df_data.copy()
     
     # Formater les colonnes pour l'affichage exact
@@ -106,16 +103,13 @@ def render():
     if 'TicketID' in df_display.columns:
         display_columns['ID Ticket'] = df_display['TicketID']
     
-    # Nom Employé - CORRECTION ICI
-    # Vérifier d'abord AssigneeFullName, sinon utiliser RealName ou combiner prénom+nom
+    # Nom Employé
     if 'AssigneeFullName' in df_display.columns:
         display_columns['Nom Employé'] = df_display['AssigneeFullName']
     elif 'RealName' in df_display.columns:
         display_columns['Nom Employé'] = df_display['RealName']
     else:
-        # Si ni l'un ni l'autre n'existe, créer une colonne par défaut
         display_columns['Nom Employé'] = "Non spécifié"
-        print("⚠️  Colonne AssigneeFullName non trouvée dans les données")
     
     # Date Création Ticket
     if 'DateCreation' in df_display.columns:
@@ -125,11 +119,11 @@ def render():
     if 'TempsHeures' in df_display.columns:
         display_columns['Temps de résolution (h)'] = df_display['TempsHeures'].apply(lambda x: f"{x:.2f}")
     
-    # Temps Moyen (h) - même valeur pour toutes les lignes
+    # Temps Moyen (h)
     if 'TempsMoyenHeures' in df_display.columns:
         display_columns['Temps Moyen (h)'] = df_display['TempsMoyenHeures'].apply(lambda x: f"{x:.2f}")
     
-    # Écart Type (h) - même valeur pour toutes les lignes
+    # Écart Type (h)
     if 'EcartTypeHeures' in df_display.columns:
         display_columns['Écart Type (h)'] = df_display['EcartTypeHeures'].apply(lambda x: f"{x:.2f}")
     
@@ -163,13 +157,8 @@ def render():
 
     # Créer le DataFrame d'affichage final
     df_display_final = pd.DataFrame(display_columns)
-    
-    # DEBUG: Afficher un échantillon des noms pour vérification
-    if 'Nom Employé' in df_display_final.columns:
-        print(f"🔍 Échantillon des noms d'employés: {df_display_final['Nom Employé'].head(5).tolist()}")
         
-    # Titre centré sans icône
-    # MODIFICATION ICI : Remplacement de <h2> par <div> avec le style de h2 pour supprimer l'ancre
+    # Titre centré
     st.markdown("""
     <div style='text-align: center; font-family: "Segoe UI", Arial, sans-serif; font-weight: 700; color: #2e2a80; margin-bottom: 20px; font-size: 2rem;'>
     TABLEAU DES ANOMALIES
@@ -239,7 +228,7 @@ def render():
             )
         
         with export_col2:
-            # Bouton d'export - MAINTENANT df_display_filtre EST DÉFINI
+            # Bouton d'export
             download_data = None
             mime_type = 'application/octet-stream'
             file_name = f"anomalies_glpi_{datetime.now().strftime('%Y%m%d_%H%M')}.{export_format.lower()}"
@@ -261,7 +250,6 @@ def render():
                     mime_type = 'application/pdf'
                 
                 if download_data is not None:
-                    # Bouton de téléchargement sans icône
                     st.download_button(
                         label="Exporter",
                         data=download_data,
