@@ -31,18 +31,17 @@ def load_data_for_analysis():
             FTP.FactKey,
             FTP.TicketID,
             FTP.AssigneeEmployeeKey,
-            DE.Username AS AssigneeFullName,  -- ← UTILISER Username DE DimEmployee
+            FTP.AssigneeFullName,  -- ← UTILISER AssigneeFullName DIRECTEMENT de FactTicketPerformance
             FTP.ProblemDescription,
             FTP.SolutionContent,
             FTP.ResolutionDurationSec,
             DD.FullDate AS DateCreation
         FROM FactTicketPerformance FTP
-        JOIN DimEmployee DE ON FTP.AssigneeEmployeeKey = DE.EmployeeKey  -- ← JOINTURE RÉTABLIE
         JOIN DimDate DD ON FTP.DateCreationKey = DD.DateKey
         WHERE FTP.ProblemDescription IS NOT NULL 
           AND FTP.SolutionContent IS NOT NULL
           AND FTP.ResolutionDurationSec IS NOT NULL
-          AND DE.Username IS NOT NULL  -- ← CONDITION CORRIGÉE
+          AND FTP.AssigneeFullName IS NOT NULL  -- ← CONDITION CORRIGÉE
         ORDER BY DD.FullDate DESC
         """)
         
@@ -64,6 +63,12 @@ def save_analysis_results(df_anomalies, cluster_results=None):
     """
     try:
         engine = create_engine(get_db_connection_url())
+        
+        #VIDER LES TABLES AVANT NOUVELLE ANALYSE
+        with engine.connect() as conn:
+            conn.execute(text("DELETE FROM FactAnomaliesDetail"))
+            conn.execute(text("DELETE FROM DimRecurrentProblems"))
+            print("✅ Anciennes données supprimées")
         
         # 1. Sauvegarde dans FactAnomaliesDetail
         if not df_anomalies.empty:
@@ -94,48 +99,33 @@ def save_analysis_results(df_anomalies, cluster_results=None):
                 'AnomalyDescription': 'Aucune description'
             })
             
-            # Vérifier les doublons avant insertion
-            with engine.connect() as conn:
-                existing_tickets = pd.read_sql(
-                    text("SELECT DISTINCT TicketID FROM FactAnomaliesDetail"), 
-                    conn
-                )['TicketID'].tolist()
-            
-            # Filtrer les doublons
-            nouvelles_anomalies = anomalies_to_save[~anomalies_to_save['TicketID'].isin(existing_tickets)]
-            
-            if not nouvelles_anomalies.empty:
-                # Insertion par lot
-                nouvelles_anomalies.to_sql(
-                    'FactAnomaliesDetail', 
-                    engine, 
-                    if_exists='append', 
-                    index=False
-                )
-                print(f"{len(nouvelles_anomalies)} anomalies sauvegardées dans FactAnomaliesDetail")
+            #INSERTION DIRECTE (plus de vérification de doublons)
+            anomalies_to_save.to_sql(
+                'FactAnomaliesDetail', 
+                engine, 
+                if_exists='append', 
+                index=False
+            )
+            print(f"✅ {len(anomalies_to_save)} anomalies sauvegardées dans FactAnomaliesDetail")
         
-        # 2. Sauvegarde des clusters dans DimRecurrentProblems
+        #Sauvegarde des clusters dans DimRecurrentProblems
         if cluster_results is not None and not cluster_results.empty:
             # Préparer les données des clusters
             clusters_to_save = cluster_results[[
                 'ProblemNameGroup', 'ClusterID', 'KeywordMatch', 'RecurrenceCount'
             ]].copy()
             
-            # Vider la table avant nouvelle insertion
-            with engine.connect() as conn:
-                conn.execute(text("DELETE FROM DimRecurrentProblems"))
-            
-            if not clusters_to_save.empty:
-                clusters_to_save.to_sql(
-                    'DimRecurrentProblems', 
-                    engine, 
-                    if_exists='append', 
-                    index=False
-                )
-                print(f"{len(clusters_to_save)} problèmes récurrents sauvegardés dans DimRecurrentProblems")
+            #INSERTION DIRECTE
+            clusters_to_save.to_sql(
+                'DimRecurrentProblems', 
+                engine, 
+                if_exists='append', 
+                index=False
+            )
+            print(f"✅ {len(clusters_to_save)} problèmes récurrents sauvegardés dans DimRecurrentProblems")
         
         return True
         
     except Exception as e:
-        print(f"Erreur lors de la sauvegarde: {e}")
+        print(f"❌ Erreur lors de la sauvegarde: {e}")
         return False
