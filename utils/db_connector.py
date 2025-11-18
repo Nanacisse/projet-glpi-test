@@ -32,8 +32,8 @@ def load_data_for_analysis():
             FTP.TicketID,
             FTP.AssigneeEmployeeKey,
             -- ✅ CORRECTION NOM DE L'EMPLOYÉ : 
-            -- Utilise DE.UserName (contenant Nom + Prénom) à la place de FirstName/LastName.
-            COALESCE(DE.UserName, FTP.AssigneeFullName) AS AssigneeFullName,
+            -- Utilise la concaténation de UserFirstname et RealName pour avoir le nom complet.
+            COALESCE(DE.UserFirstname + ' ' + DE.RealName, FTP.AssigneeFullName) AS AssigneeFullName,
             FTP.ProblemDescription,
             FTP.SolutionContent,
             FTP.ResolutionDurationSec,
@@ -70,7 +70,6 @@ def save_analysis_results(df_anomalies, cluster_results=None):
         
         # VIDER LES TABLES AVANT NOUVELLE ANALYSE
         with engine.connect() as conn:
-            # Assurez-vous que cette syntaxe est bien supportée par votre version de SQLAlchemy/pyodbc
             conn.execute(text("DELETE FROM FactAnomaliesDetail"))
             conn.execute(text("DELETE FROM DimRecurrentProblems"))
             conn.commit() # Validation des suppressions
