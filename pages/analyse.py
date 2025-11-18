@@ -15,46 +15,44 @@ def start_analysis():
     """Fonction pour lancer l'analyse complète avec sauvegarde en base."""
     st.session_state['analysis_started'] = True
     
-    # Créer un espace pour les messages de progression
-    progress_placeholder = st.empty()
+    # Nous allons maintenant utiliser un seul bloc spinner/progress pour la clarté.
+    # L'utilisateur verra "Analyse en cours..." avec l'icône de chargement.
     
-    # ✅ CORRECTION : Affichage du message d'information immédiat. C'est ce bloc qui doit rester.
-    info_message = st.info("🔄 Analyse en cours...") 
+    # Utilisez un st.empty() pour gérer les messages de fin
+    status_message_placeholder = st.empty()
     
-    # Utilisation de st.spinner pour afficher l'icône de chargement pendant le processus
-    with progress_placeholder.container():
-        with st.spinner('Analyse en cours...'):
-            # 1. Chargement des données
-            data_to_analyze = load_data_for_analysis()
+    with st.spinner('🔄 Analyse en cours...'):
+        # 1. Chargement des données
+        data_to_analyze = load_data_for_analysis()
+        
+        if data_to_analyze is None or data_to_analyze.empty:
+            status_message_placeholder.error("❌ Erreur de chargement des données. Vérifiez la connexion à la base de donnée.")
+            st.session_state['analysis_started'] = False
+            return
             
-            if data_to_analyze is None or data_to_analyze.empty:
-                info_message.error("❌ Erreur de chargement des données. Vérifiez la connexion à la base de donnée.")
-                st.session_state['analysis_started'] = False
-                return
-                
-            # 2. Exécution du moteur d'analyse
-            df_anomalies, cluster_results = run_full_analysis(data_to_analyze)
-            
-            # 3. Sauvegarde dans la base de données
-            save_success = save_analysis_results(df_anomalies, cluster_results)
-            
-            if save_success:
-                info_message.success("Analyse terminée et résultats sauvegardés en base de données")
-            else:
-                info_message.warning("L'analyse est terminée mais la sauvegarde a échoué.")
-            
-            # 4. Stockage du résultat dans l'état de la session
-            st.session_state['anomaly_data'] = df_anomalies
-            st.session_state['pagination_offset'] = 0
-            
-    # Effacer le message d'information/spinner
-    info_message.empty()
-    progress_placeholder.empty()
-
-    # Affichage automatique de la Page 2 après succès
+        # 2. Exécution du moteur d'analyse
+        df_anomalies, cluster_results = run_full_analysis(data_to_analyze)
+        
+        # 3. Sauvegarde dans la base de données
+        save_success = save_analysis_results(df_anomalies, cluster_results)
+        
+        # 4. Stockage du résultat dans l'état de la session
+        st.session_state['anomaly_data'] = df_anomalies
+        st.session_state['pagination_offset'] = 0
+        
+    # Le spinner est automatiquement effacé ici.
+    
+    # 5. Affichage du résultat final après l'analyse
     if save_success:
+        status_message_placeholder.success("✅ Analyse terminée et résultats sauvegardés en base de données.")
+        
+        # Affichage automatique de la Page 2 après succès
         st.session_state['current_page'] = 2
-        st.rerun()
+        st.rerun() 
+    else:
+        status_message_placeholder.warning("⚠️ L'analyse est terminée mais la sauvegarde a échoué.")
+        st.session_state['analysis_started'] = False
+
 
 def render():
     """Affiche le contenu de la Page 1."""
@@ -75,7 +73,7 @@ def render():
     ai_icon = get_base64_encoded_image("styles/icones/ai_icon.png")
     analyze_icon = get_base64_encoded_image("styles/icones/analyze.png")
 
-    # Appliquer le style CSS
+    # Appliquer le style CSS (laissé inchangé)
     st.markdown(f"""
     <style>
     #analyze-frame {{
@@ -200,8 +198,5 @@ def render():
                 if st.button("Analyser maintenant", key="analyze_trigger", use_container_width=True):
                     start_analysis()
                 
-            # ❌ ANCIEN BLOC ST.INFO RETIRÉ. 
-            # Maintenant, le message d'analyse s'affiche via st.info DANS la fonction start_analysis.
-            
 if __name__ == "__main__":
     render()
