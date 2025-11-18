@@ -15,30 +15,46 @@ def start_analysis():
     """Fonction pour lancer l'analyse complète avec sauvegarde en base."""
     st.session_state['analysis_started'] = True
     
-    with st.spinner('Analyse en cours...'):
-        # 1. Chargement des données
-        data_to_analyze = load_data_for_analysis()
-        
-        if data_to_analyze is None or data_to_analyze.empty:
-            st.error("❌ Erreur de chargement des données. Vérifiez la connexion à la base de donnée.")
-            st.session_state['analysis_started'] = False
-            return
+    # Créer un espace pour les messages de progression
+    progress_placeholder = st.empty()
+    
+    # ✅ CORRECTION : Affichage du message d'information immédiat. C'est ce bloc qui doit rester.
+    info_message = st.info("🔄 Analyse en cours...") 
+    
+    # Utilisation de st.spinner pour afficher l'icône de chargement pendant le processus
+    with progress_placeholder.container():
+        with st.spinner('Analyse en cours...'):
+            # 1. Chargement des données
+            data_to_analyze = load_data_for_analysis()
             
-        # 2. Exécution du moteur d'analyse
-        df_anomalies, cluster_results = run_full_analysis(data_to_analyze)
-        
-        # 3. Sauvegarde dans la base de données
-        save_success = save_analysis_results(df_anomalies, cluster_results)
-        
-        if not save_success:
-            st.warning("⚠️ L'analyse est terminée mais la sauvegarde a échoué.")
-        
-        # 4. Stockage du résultat dans l'état de la session
-        st.session_state['anomaly_data'] = df_anomalies
-        st.session_state['current_page'] = 2
-        st.session_state['pagination_offset'] = 0
+            if data_to_analyze is None or data_to_analyze.empty:
+                info_message.error("❌ Erreur de chargement des données. Vérifiez la connexion à la base de donnée.")
+                st.session_state['analysis_started'] = False
+                return
+                
+            # 2. Exécution du moteur d'analyse
+            df_anomalies, cluster_results = run_full_analysis(data_to_analyze)
+            
+            # 3. Sauvegarde dans la base de données
+            save_success = save_analysis_results(df_anomalies, cluster_results)
+            
+            if save_success:
+                info_message.success("Analyse terminée et résultats sauvegardés en base de données")
+            else:
+                info_message.warning("L'analyse est terminée mais la sauvegarde a échoué.")
+            
+            # 4. Stockage du résultat dans l'état de la session
+            st.session_state['anomaly_data'] = df_anomalies
+            st.session_state['pagination_offset'] = 0
+            
+    # Effacer le message d'information/spinner
+    info_message.empty()
+    progress_placeholder.empty()
 
-    st.rerun()
+    # Affichage automatique de la Page 2 après succès
+    if save_success:
+        st.session_state['current_page'] = 2
+        st.rerun()
 
 def render():
     """Affiche le contenu de la Page 1."""
@@ -53,26 +69,19 @@ def render():
     
     # Si on est déjà sur la page 2, on laisse app.py gérer l'affichage
     if st.session_state.get('current_page') == 2:
-        st.rerun()  # <-- PROBLÈME POTENTIEL : redéclenche tout le script app.py
         return
 
     # Charger les images en base64
     ai_icon = get_base64_encoded_image("styles/icones/ai_icon.png")
     analyze_icon = get_base64_encoded_image("styles/icones/analyze.png")
 
-    # Appliquer le style CSS et injecter l'ID de cadre
+    # Appliquer le style CSS
     st.markdown(f"""
     <style>
-    /* ----------------------------------------------------------------------------------- */
-    /* NOUVELLE RÈGLE pour cibler le conteneur Streamlit et appliquer le style analyze-card */
-    /* Le style exact est dans main.css, ici on prépare le terrain pour l'ID analyze-frame */
     #analyze-frame {{
-        /* Ceci garantit que l'ID est reconnu dans cette page */
         width: 100%;
     }}
-    /* ----------------------------------------------------------------------------------- */
 
-    /* Style pour le bouton Streamlit */
     .stButton > button {{
         background: linear-gradient(45deg, #4CAF50, #45a049) !important;
         color: white !important;
@@ -101,7 +110,6 @@ def render():
         color: white !important;
     }}
     
-    /* Ajouter l'icône via pseudo-élément */
     .stButton > button::before {{
         content: "";
         display: inline-block;
@@ -131,7 +139,6 @@ def render():
         height: 60px;
     }}
     
-    /* MODIFICATION ICI : Cible le nouveau span pour conserver le style du H1 sans ancre */
     .system-title-text {{
         color: #2e2a80;
         font-size: 2.5rem;
@@ -141,7 +148,6 @@ def render():
     }}
     
     .analyze-card {{
-        /* Ces styles seront déplacés vers #analyze-frame > div dans main.css, mais on les garde ici au cas où ils sont utilisés ailleurs */
         background: linear-gradient(135deg, #ffffff, #f8f9fa);
         border-radius: 20px;
         padding: 50px 40px;
@@ -169,7 +175,6 @@ def render():
         st.markdown("<div style='height: 50px;'></div>", unsafe_allow_html=True)
         
         # En-tête avec le nom du système et l'icône AI
-        # MODIFICATION ICI : Remplacement de <h1> par <span class='system-title-text'>
         st.markdown(f"""
         <div class='system-title'>
             <img src="data:image/png;base64,{ai_icon}">
@@ -181,30 +186,22 @@ def render():
         col1, col2, col3 = st.columns([1, 2, 1])
         
         with col2:
-            # DÉBUT DE LA MODIFICATION POUR ENCADRER LE TEXTE ET LE BOUTON
-            
-            #Utiliser st.container pour regrouper les éléments
             with st.container():
-                #Injecter l'ID pour que le CSS puisse cibler ce conteneur
                 st.markdown('<div id="analyze-frame"></div>', unsafe_allow_html=True)
 
-                # Texte d'instruction (maintenant à l'intérieur du cadre)
+                # Texte d'instruction
                 st.markdown("""
                     <div class='analyze-instruction'>
                         Cliquez sur le bouton ci-dessous pour lancer l'analyse
                     </div>
                 """, unsafe_allow_html=True)
                 
-                # Bouton Streamlit unique et stylisé (juste après le texte)
+                # Bouton d'analyse
                 if st.button("Analyser maintenant", key="analyze_trigger", use_container_width=True):
                     start_analysis()
-
-            # FIN DE LA MODIFICATION POUR ENCADRER LE TEXTE ET LE BOUTON
-            
-            # Informations sur l'état de l'analyse (EN DEHORS du cadre)
-            if st.session_state.get('analysis_started'):
-                st.info(" Analyse en cours...")
                 
+            # ❌ ANCIEN BLOC ST.INFO RETIRÉ. 
+            # Maintenant, le message d'analyse s'affiche via st.info DANS la fonction start_analysis.
+            
 if __name__ == "__main__":
     render()
-
