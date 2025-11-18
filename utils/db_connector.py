@@ -31,15 +31,16 @@ def load_data_for_analysis():
             FTP.FactKey,
             FTP.TicketID,
             FTP.AssigneeEmployeeKey,
-            -- Tente de concaténer Prénom et Nom de la table DimEmployee pour garantir le nom complet
-            COALESCE(DE.FirstName + ' ' + DE.LastName, FTP.AssigneeFullName) AS AssigneeFullName,
+            -- ✅ CORRECTION NOM DE L'EMPLOYÉ : 
+            -- Utilise DE.UserName (contenant Nom + Prénom) à la place de FirstName/LastName.
+            COALESCE(DE.UserName, FTP.AssigneeFullName) AS AssigneeFullName,
             FTP.ProblemDescription,
             FTP.SolutionContent,
             FTP.ResolutionDurationSec,
             DD.FullDate AS DateCreation
         FROM FactTicketPerformance FTP
         JOIN DimDate DD ON FTP.DateCreationKey = DD.DateKey
-        -- Jointure hypothétique pour le nom complet, à vérifier avec votre schéma
+        -- Jointure à DimEmployee pour récupérer le nom complet
         LEFT JOIN DimEmployee DE ON FTP.AssigneeEmployeeKey = DE.EmployeeKey
         WHERE FTP.ProblemDescription IS NOT NULL 
           AND FTP.SolutionContent IS NOT NULL
@@ -69,9 +70,10 @@ def save_analysis_results(df_anomalies, cluster_results=None):
         
         # VIDER LES TABLES AVANT NOUVELLE ANALYSE
         with engine.connect() as conn:
+            # Assurez-vous que cette syntaxe est bien supportée par votre version de SQLAlchemy/pyodbc
             conn.execute(text("DELETE FROM FactAnomaliesDetail"))
             conn.execute(text("DELETE FROM DimRecurrentProblems"))
-            conn.commit()
+            conn.commit() # Validation des suppressions
             print("Anciennes données supprimées")
         
         # 1. Sauvegarde dans FactAnomaliesDetail
