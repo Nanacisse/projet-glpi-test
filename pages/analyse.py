@@ -15,14 +15,11 @@ def start_analysis():
     """Fonction pour lancer l'analyse complète avec sauvegarde en base."""
     st.session_state['analysis_started'] = True
     
-    # Nous allons maintenant utiliser un seul bloc spinner/progress pour la clarté.
-    # L'utilisateur verra "Analyse en cours..." avec l'icône de chargement.
-    
-    # Utilisez un st.empty() pour gérer les messages de fin
+    #st.empty() pour gérer les messages de fin
     status_message_placeholder = st.empty()
     
-    with st.spinner('🔄 Analyse en cours...'):
-        # 1. Chargement des données
+    with st.spinner('Analyse en cours...'):
+        #Chargement des données
         data_to_analyze = load_data_for_analysis()
         
         if data_to_analyze is None or data_to_analyze.empty:
@@ -30,34 +27,32 @@ def start_analysis():
             st.session_state['analysis_started'] = False
             return
             
-        # 2. Exécution du moteur d'analyse
+        #Exécution du moteur d'analyse
         df_anomalies, cluster_results = run_full_analysis(data_to_analyze)
         
-        # 3. Sauvegarde dans la base de données
+        #Sauvegarde dans la base de données
         save_success = save_analysis_results(df_anomalies, cluster_results)
         
-        # 4. Stockage du résultat dans l'état de la session
+        #Stockage du résultat dans l'état de la session
         st.session_state['anomaly_data'] = df_anomalies
         st.session_state['pagination_offset'] = 0
         
-    # Le spinner est automatiquement effacé ici.
-    
-    # 5. Affichage du résultat final après l'analyse
+    #Affichage du résultat final après l'analyse
     if save_success:
-        status_message_placeholder.success("✅ Analyse terminée et résultats sauvegardés en base de données.")
+        status_message_placeholder.success("Analyse terminée et résultats sauvegardés en base de données.")
         
-        # Affichage automatique de la Page 2 après succès
+        #Affichage automatique de la Page 2 après succès
         st.session_state['current_page'] = 2
         st.rerun() 
     else:
-        status_message_placeholder.warning("⚠️ L'analyse est terminée mais la sauvegarde a échoué.")
+        status_message_placeholder.warning("L'analyse est terminée mais la sauvegarde a échoué.")
         st.session_state['analysis_started'] = False
 
 
 def render():
     """Affiche le contenu de la Page 1."""
     
-    # Vérification et initialisation des variables de session
+    #Vérification et initialisation des variables de session
     if 'current_page' not in st.session_state:
         st.session_state['current_page'] = 1
     if 'analysis_started' not in st.session_state:
@@ -65,15 +60,15 @@ def render():
     if 'pagination_offset' not in st.session_state:
         st.session_state['pagination_offset'] = 0
     
-    # Si on est déjà sur la page 2, on laisse app.py gérer l'affichage
+    #Si on est déjà sur la page 2, on laisse app.py gérer l'affichage
     if st.session_state.get('current_page') == 2:
         return
 
-    # Charger les images en base64
+    #Charger les images en base64
     ai_icon = get_base64_encoded_image("styles/icones/ai_icon.png")
     analyze_icon = get_base64_encoded_image("styles/icones/analyze.png")
 
-    # Appliquer le style CSS (laissé inchangé)
+    #Appliquer le style CSS
     st.markdown(f"""
     <style>
     #analyze-frame {{
@@ -167,34 +162,34 @@ def render():
     </style>
     """, unsafe_allow_html=True)
 
-    # Conteneur principal centré
+    #Conteneur principal centré
     with st.container():
-        # Espacement en haut
+        #Espacement en haut
         st.markdown("<div style='height: 50px;'></div>", unsafe_allow_html=True)
         
-        # En-tête avec le nom du système et l'icône AI
+        #En-tête avec le nom du système et l'icône AI
         st.markdown(f"""
         <div class='system-title'>
             <img src="data:image/png;base64,{ai_icon}">
-            <span class='system-title-text'>YeschControl AI</span>
+            <span class='system-title-text'>YeshControl AI</span>
         </div>
         """, unsafe_allow_html=True)
         
-        # Colonnes pour centrer le contenu
+        #Colonnes pour centrer le contenu
         col1, col2, col3 = st.columns([1, 2, 1])
         
         with col2:
             with st.container():
                 st.markdown('<div id="analyze-frame"></div>', unsafe_allow_html=True)
 
-                # Texte d'instruction
+                #Texte d'instruction
                 st.markdown("""
                     <div class='analyze-instruction'>
                         Cliquez sur le bouton ci-dessous pour lancer l'analyse
                     </div>
                 """, unsafe_allow_html=True)
                 
-                # Bouton d'analyse
+                #Bouton d'analyse
                 if st.button("Analyser maintenant", key="analyze_trigger", use_container_width=True):
                     start_analysis()
                 

@@ -3,7 +3,7 @@ from sqlalchemy import create_engine, text
 import pandas as pd
 from datetime import datetime
  
-# Configuration de la connexion
+#Configuration de la connexion
 SERVER_NAME = 'CIYGSG9030DK\SQLEXPRESS' 
 DATABASE_NAME = 'GLPI_DWH'
 DRIVER = 'ODBC Driver 17 for SQL Server'
@@ -31,8 +31,6 @@ def load_data_for_analysis():
             FTP.FactKey,
             FTP.TicketID,
             FTP.AssigneeEmployeeKey,
-            -- ✅ CORRECTION NOM DE L'EMPLOYÉ : 
-            -- Utilise la concaténation de UserFirstname et RealName pour avoir le nom complet.
             COALESCE(DE.UserFirstname + ' ' + DE.RealName, FTP.AssigneeFullName) AS AssigneeFullName,
             FTP.ProblemDescription,
             FTP.SolutionContent,
@@ -40,7 +38,6 @@ def load_data_for_analysis():
             DD.FullDate AS DateCreation
         FROM FactTicketPerformance FTP
         JOIN DimDate DD ON FTP.DateCreationKey = DD.DateKey
-        -- Jointure à DimEmployee pour récupérer le nom complet
         LEFT JOIN DimEmployee DE ON FTP.AssigneeEmployeeKey = DE.EmployeeKey
         WHERE FTP.ProblemDescription IS NOT NULL 
           AND FTP.SolutionContent IS NOT NULL
@@ -52,7 +49,7 @@ def load_data_for_analysis():
         df = pd.read_sql(query, engine)
         
         if not df.empty:
-            # Conversion de la durée de résolution en heures
+            #Conversion de la durée de résolution en heures
             df['TempsHeures'] = df['ResolutionDurationSec'] / 3600.0
             
         return df
@@ -63,25 +60,25 @@ def load_data_for_analysis():
  
 def save_analysis_results(df_anomalies, cluster_results=None):
     """
-    Sauvegarde les résultats d'analyse dans FactAnomaliesDetail et DimRecurrentProblems.
+    Sauvegarde les résultats d'analyse dans FactAnomaliesDetail et DimRecurrentProblems
     """
     try:
         engine = create_engine(get_db_connection_url())
         
-        # VIDER LES TABLES AVANT NOUVELLE ANALYSE
+        #Vider les tables avant nouvelle analyse
         with engine.connect() as conn:
             conn.execute(text("DELETE FROM FactAnomaliesDetail"))
             conn.execute(text("DELETE FROM DimRecurrentProblems"))
-            conn.commit() # Validation des suppressions
+            conn.commit()
             print("Anciennes données supprimées")
         
-        # 1. Sauvegarde dans FactAnomaliesDetail
+        #Sauvegarde dans FactAnomaliesDetail
         if not df_anomalies.empty:
-            # Vérifier que FactKey existe
+            #Vérifier que FactKey existe
             if 'FactKey' not in df_anomalies.columns:
                 df_anomalies['FactKey'] = df_anomalies.index
             
-            # Préparer les données pour l'insertion
+            #Préparer les données pour l'insertion
             anomalies_to_save = df_anomalies[[
                 'TicketID', 'FactKey', 'AssigneeEmployeeKey', 'AssigneeFullName',
                 'TicketNote', 'EmployeeAvgScore', 'ScoreSemantique', 'ScoreConcordance',
@@ -89,7 +86,7 @@ def save_analysis_results(df_anomalies, cluster_results=None):
                 'AnomalieTemporelle', 'Statut', 'AnomalyDescription'
             ]].copy()
             
-            # Nettoyer les données
+            #Nettoyer les données
             anomalies_to_save = anomalies_to_save.fillna({
                 'TicketNote': 0,
                 'EmployeeAvgScore': 0,
@@ -104,7 +101,7 @@ def save_analysis_results(df_anomalies, cluster_results=None):
                 'AnomalyDescription': 'Aucune description'
             })
             
-            # INSERTION DIRECTE
+            #Insertion directe
             anomalies_to_save.to_sql(
                 'FactAnomaliesDetail', 
                 engine, 
@@ -113,14 +110,14 @@ def save_analysis_results(df_anomalies, cluster_results=None):
             )
             print(f"{len(anomalies_to_save)} anomalies sauvegardées dans FactAnomaliesDetail")
         
-        # 2. Sauvegarde des clusters dans DimRecurrentProblems
+        #Sauvegarde des clusters dans DimRecurrentProblems
         if cluster_results is not None and not cluster_results.empty:
-            # Préparer les données des clusters
+            #Préparer les données des clusters
             clusters_to_save = cluster_results[[
                 'ProblemNameGroup', 'ClusterID', 'KeywordMatch', 'RecurrenceCount'
             ]].copy()
             
-            # INSERTION DIRECTE
+            #Insertion direct
             clusters_to_save.to_sql(
                 'DimRecurrentProblems', 
                 engine, 

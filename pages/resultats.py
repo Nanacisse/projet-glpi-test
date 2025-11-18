@@ -5,7 +5,7 @@ import base64
 from datetime import datetime
 from utils.analysis_engine import SEMAN_THRESHOLD, CONC_THRESHOLD
 
-# Import des bibliothèques d'export
+#Import des bibliothèques d'export
 try:
     from fpdf import FPDF
     HAS_FPDF = True
@@ -29,7 +29,7 @@ def export_to_pdf(df):
         pdf.add_page()
         pdf.set_font("Arial", size=6)
         
-        # En-tête du tableau
+        #En-tête du tableau
         headers = df.columns.tolist()
         col_width = 280 / len(headers)
         
@@ -37,7 +37,7 @@ def export_to_pdf(df):
             pdf.cell(col_width, 10, str(header), 1, 0, 'C')
         pdf.ln()
 
-        # Corps du tableau
+        #Corps du tableau
         for index, row in df.iterrows():
             for item in row:
                 # Tronquer les textes trop longs
@@ -80,7 +80,7 @@ def get_status_with_icon(status):
 def render():
     """Affiche le contenu de la Page 2."""
     
-    # Bouton de retour en haut à gauche
+    #Bouton de retour en haut à gauche
     col_retour, col_titre = st.columns([0.1, 0.9])
     with col_retour:
         if st.button("←", key="retour_analyse", help="Retour à l'analyse"):
@@ -93,17 +93,17 @@ def render():
         st.warning("⚠️ Aucune donnée d'anomalie disponible. Veuillez lancer l'analyse d'abord.")
         return
     
-    # Préparer les données pour l'affichage
+    #Préparer les données pour l'affichage
     df_display = df_data.copy()
     
-    # Formater les colonnes pour l'affichage exact
+    #Formater les colonnes pour l'affichage exact
     display_columns = {}
     
-    # ID Ticket
+    #ID Ticket
     if 'TicketID' in df_display.columns:
         display_columns['ID Ticket'] = df_display['TicketID']
     
-    # Nom Employé
+    #Nom Employé
     if 'AssigneeFullName' in df_display.columns:
         display_columns['Nom Employé'] = df_display['AssigneeFullName']
     elif 'RealName' in df_display.columns:
@@ -111,54 +111,54 @@ def render():
     else:
         display_columns['Nom Employé'] = "Non spécifié"
     
-    # Date Création Ticket
+    #Date Création Ticket
     if 'DateCreation' in df_display.columns:
         display_columns['Date Création Ticket'] = pd.to_datetime(df_display['DateCreation']).dt.strftime('%d/%m/%Y')
     
-    # Temps de résolution (h)
+    #Temps de résolution (h)
     if 'TempsHeures' in df_display.columns:
         display_columns['Temps de résolution (h)'] = df_display['TempsHeures'].apply(lambda x: f"{x:.2f}")
     
-    # Temps Moyen (h)
+    #Temps Moyen (h)
     if 'TempsMoyenHeures' in df_display.columns:
         display_columns['Temps Moyen (h)'] = df_display['TempsMoyenHeures'].apply(lambda x: f"{x:.2f}")
     
-    # Écart Type (h)
+    #Écart Type (h)
     if 'EcartTypeHeures' in df_display.columns:
         display_columns['Écart Type (h)'] = df_display['EcartTypeHeures'].apply(lambda x: f"{x:.2f}")
     
-    # Score Temporel (Z-score)
+    #Score Temporel (Z-score)
     if 'ScoreTemporel' in df_display.columns:
         display_columns['Score Temporel'] = df_display['ScoreTemporel'].apply(lambda x: f"{x:.2f}")
     
-    # Anomalie Temporelle
+    #Anomalie Temporelle
     if 'AnomalieTemporelle' in df_display.columns:
         display_columns['Anomalie Temporelle'] = df_display['AnomalieTemporelle']
     
-    # Score Sémantique (%)
+    #Score Sémantique (%)
     if 'ScoreSemantique' in df_display.columns:
         display_columns['Score Sémantique (%)'] = df_display['ScoreSemantique'].apply(lambda x: f"{x:.1f}%")
     
-    # Score Concordance (%)
+    #Score Concordance (%)
     if 'ScoreConcordance' in df_display.columns:
         display_columns['Score Concordance (%)'] = df_display['ScoreConcordance'].apply(lambda x: f"{x:.1f}%")
     
-    # Note Ticket (Base 10)
+    #Note Ticket (Base 10)
     if 'TicketNote' in df_display.columns:
         display_columns['Note Ticket (Base 10)'] = df_display['TicketNote'].apply(lambda x: f"{x:.1f}")
     
-    # Moyenne Employé (/10)
+    #Moyenne Employé (/10)
     if 'EmployeeAvgScore' in df_display.columns:
         display_columns['Moyenne Employé (/10)'] = df_display['EmployeeAvgScore'].apply(lambda x: f"{x:.1f}")
     
-    # Statut avec icônes
+    #Statut avec icônes
     if 'Statut' in df_display.columns:
         display_columns['Statut'] = df_display['Statut'].apply(get_status_with_icon)
 
-    # Créer le DataFrame d'affichage final
+    #Créer le DataFrame d'affichage final
     df_display_final = pd.DataFrame(display_columns)
         
-    # Titre centré
+    #Titre centré
     st.markdown("""
     <div style='text-align: center; font-family: "Segoe UI", Arial, sans-serif; font-weight: 700; color: #2e2a80; margin-bottom: 20px; font-size: 2rem;'>
     TABLEAU DES ANOMALIES
@@ -315,7 +315,7 @@ def render():
                 st.session_state['pagination_offset'] = current_page + 1
                 st.rerun()
     else:
-        st.info("ℹ️ Aucun résultat ne correspond aux filtres sélectionnés.")
+        st.info("Aucun résultat ne correspond aux filtres sélectionnés.")
 
 if __name__ == "__main__":
     render()

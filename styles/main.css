@@ -118,8 +118,6 @@ table td {
 }
 
 
-/* NOUVEAU BLOC POUR ENCADRER LE CONTENU ANALYSE.PY (COPIE DE .analyze-card) */
-
 /* Cible le div interne du st.container qui contient l'ID #analyze-frame */
 #analyze-frame > div {
     /* Reprise des styles de .analyze-card pour le conteneur */

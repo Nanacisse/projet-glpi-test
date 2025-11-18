@@ -1,5 +1,5 @@
 import streamlit as st
-# --- AJOUTS PRO POUR MASQUER LES ÉLÉMENTS DE DÉVELOPPEMENT ---
+# Masquer les éléments de développement
 hide_elements_style = """
 <style>
 /* Masque le pied de page 'Made with Streamlit' */
@@ -13,10 +13,8 @@ div[data-testid="stStatusWidget"] {
 </style>
 """
 st.markdown(hide_elements_style, unsafe_allow_html=True)
-# -----------------------------------------------------------------
 
-
-# --- Configuration de base de l'application ---
+#Configuration de base de l'application
 st.set_page_config(
     page_title="YeshControl IA",
     page_icon="styles/icones/ai_icon.png", 
@@ -24,14 +22,14 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Chargement du style CSS
+#Chargement du style CSS
 try:
     with open("styles/main.css") as f:
         st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
 except FileNotFoundError:
     st.warning("Fichier CSS non trouvé")
 
-# --- Gestion de l'état de la session ---
+#Gestion de l'état de la session
 if 'analysis_started' not in st.session_state:
     st.session_state['analysis_started'] = False
 if 'anomaly_data' not in st.session_state:
@@ -41,14 +39,14 @@ if 'current_page' not in st.session_state:
 if 'pagination_offset' not in st.session_state:
     st.session_state['pagination_offset'] = 0
 
-# --- Navigation principale ---
+#Navigation principale
 if st.session_state['current_page'] == 1:
-    # Import et affichage de la page analyse
+    #Import et affichage de la page analyse
     from pages.analyse import render as render_analyse
     render_analyse()
     
 elif st.session_state['current_page'] == 2:
-    # Import et affichage de la page résultats
+    #Import et affichage de la page résultats
     from pages.resultats import render as render_resultats
     render_resultats()
 
