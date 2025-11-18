@@ -217,7 +217,7 @@ def run_full_analysis(df):
     if df.empty:
         return df, None
     
-    print(f"🔧 Début de l'analyse sur {len(df)} tickets assignés")
+    print(f"Début de l'analyse sur {len(df)} tickets assignés")
     
     #Analyse Sémantique
     df['ScoreSemantique'] = df['SolutionContent'].apply(calculate_semantique_score)
