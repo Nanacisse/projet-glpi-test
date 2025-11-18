@@ -1,18 +1,17 @@
-
 import pyodbc
 from sqlalchemy import create_engine, text
 import pandas as pd
 from datetime import datetime
-
+ 
 # Configuration de la connexion
-SERVER_NAME = r'CIYGSG9030DK\SQLEXPRESS'  # ← CORRECTION : ajout du 'r' pour raw string
+SERVER_NAME = 'CIYGSG9030DK\SQLEXPRESS' 
 DATABASE_NAME = 'GLPI_DWH'
 DRIVER = 'ODBC Driver 17 for SQL Server'
-
+ 
 def get_db_connection_url():
     """Crée l'URL de connexion pour SQLAlchemy."""
     return f"mssql+pyodbc://@{SERVER_NAME}/{DATABASE_NAME}?driver={DRIVER}&trusted_connection=yes"
-
+ 
 def get_db_connection():
     """Crée une connexion directe pyodbc."""
     try:
@@ -21,7 +20,7 @@ def get_db_connection():
     except Exception as e:
         print(f"Erreur de connexion pyodbc: {e}")
         return None
-
+ 
 def load_data_for_analysis():
     """Charge les données nécessaires pour l'analyse depuis FactTicketPerformance."""
     try:
@@ -32,13 +31,16 @@ def load_data_for_analysis():
             FTP.FactKey,
             FTP.TicketID,
             FTP.AssigneeEmployeeKey,
-            FTP.AssigneeFullName,
+            -- Tente de concaténer Prénom et Nom de la table DimEmployee pour garantir le nom complet
+            COALESCE(DE.FirstName + ' ' + DE.LastName, FTP.AssigneeFullName) AS AssigneeFullName,
             FTP.ProblemDescription,
             FTP.SolutionContent,
             FTP.ResolutionDurationSec,
             DD.FullDate AS DateCreation
         FROM FactTicketPerformance FTP
         JOIN DimDate DD ON FTP.DateCreationKey = DD.DateKey
+        -- Jointure hypothétique pour le nom complet, à vérifier avec votre schéma
+        LEFT JOIN DimEmployee DE ON FTP.AssigneeEmployeeKey = DE.EmployeeKey
         WHERE FTP.ProblemDescription IS NOT NULL 
           AND FTP.SolutionContent IS NOT NULL
           AND FTP.ResolutionDurationSec IS NOT NULL
@@ -57,7 +59,7 @@ def load_data_for_analysis():
     except Exception as e:
         print(f"Erreur de chargement des données: {e}")
         return pd.DataFrame()
-
+ 
 def save_analysis_results(df_anomalies, cluster_results=None):
     """
     Sauvegarde les résultats d'analyse dans FactAnomaliesDetail et DimRecurrentProblems.
@@ -65,13 +67,12 @@ def save_analysis_results(df_anomalies, cluster_results=None):
     try:
         engine = create_engine(get_db_connection_url())
         
-        print("🔄 Début de la sauvegarde...")
-        
-        # 🔥 CORRECTION : VIDER LES TABLES EN PREMIER
+        # VIDER LES TABLES AVANT NOUVELLE ANALYSE
         with engine.connect() as conn:
             conn.execute(text("DELETE FROM FactAnomaliesDetail"))
             conn.execute(text("DELETE FROM DimRecurrentProblems"))
-            print("✅ Anciennes données supprimées")
+            conn.commit()
+            print("Anciennes données supprimées")
         
         # 1. Sauvegarde dans FactAnomaliesDetail
         if not df_anomalies.empty:
@@ -109,7 +110,7 @@ def save_analysis_results(df_anomalies, cluster_results=None):
                 if_exists='append', 
                 index=False
             )
-            print(f"✅ {len(anomalies_to_save)} NOUVELLES anomalies sauvegardées dans FactAnomaliesDetail")
+            print(f"{len(anomalies_to_save)} anomalies sauvegardées dans FactAnomaliesDetail")
         
         # 2. Sauvegarde des clusters dans DimRecurrentProblems
         if cluster_results is not None and not cluster_results.empty:
@@ -125,9 +126,8 @@ def save_analysis_results(df_anomalies, cluster_results=None):
                 if_exists='append', 
                 index=False
             )
-            print(f"✅ {len(clusters_to_save)} NOUVEAUX problèmes récurrents sauvegardés dans DimRecurrentProblems")
+            print(f"{len(clusters_to_save)} problèmes récurrents sauvegardés dans DimRecurrentProblems")
         
-        print("🎯 Sauvegarde terminée avec succès")
         return True
         
     except Exception as e:

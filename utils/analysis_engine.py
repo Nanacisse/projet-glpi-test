@@ -21,7 +21,7 @@ CONC_THRESHOLD = 0.40   # 40%
 Z_SCORE_THRESHOLD = 2   # |Z| > 2
 
 def calculate_semantique_score(text):
-    """Calcule le score sémantique pour les descriptions de problèmes."""
+    """Calcule le score sémantique pour les descriptions de solutions."""
     if not nlp or pd.isna(text):
         return 0.0
     
@@ -219,8 +219,8 @@ def run_full_analysis(df):
     
     print(f"🔧 Début de l'analyse sur {len(df)} tickets assignés")
     
-    # 1. Analyse Sémantique
-    df['ScoreSemantique'] = df['ProblemDescription'].apply(calculate_semantique_score)
+    # 1. Analyse Sémantique: APPLIQUÉE À LA DESCRIPTION DES SOLUTIONS
+    df['ScoreSemantique'] = df['SolutionContent'].apply(calculate_semantique_score)
     
     # 2. Analyse de Concordance
     df['ScoreConcordance'] = df.apply(
@@ -277,13 +277,9 @@ def run_full_analysis(df):
                         })
                 
                 cluster_results = pd.DataFrame(cluster_data)
-                print(f"🔍 Clustering terminé: {n_clusters} clusters identifiés")
+                print(f"Clustering terminé: {n_clusters} clusters identifiés")
                 
         except Exception as e:
-            print(f"❌ Erreur clustering: {e}")
-            df['ClusterID'] = 0
-            cluster_results = None
-
-    print(f"✅ Analyse terminée: {len(df)} tickets analysés")
+            print(f"Erreur clustering: {e}")
+            
     return df, cluster_results
-
