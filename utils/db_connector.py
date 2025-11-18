@@ -1,10 +1,11 @@
+
 import pyodbc
 from sqlalchemy import create_engine, text
 import pandas as pd
 from datetime import datetime
 
 # Configuration de la connexion
-SERVER_NAME = 'CIYGSG9030DK\SQLEXPRESS' 
+SERVER_NAME = r'CIYGSG9030DK\SQLEXPRESS'  # ← CORRECTION : ajout du 'r' pour raw string
 DATABASE_NAME = 'GLPI_DWH'
 DRIVER = 'ODBC Driver 17 for SQL Server'
 
@@ -64,11 +65,13 @@ def save_analysis_results(df_anomalies, cluster_results=None):
     try:
         engine = create_engine(get_db_connection_url())
         
-        # VIDER LES TABLES AVANT NOUVELLE ANALYSE
+        print("🔄 Début de la sauvegarde...")
+        
+        # 🔥 CORRECTION : VIDER LES TABLES EN PREMIER
         with engine.connect() as conn:
             conn.execute(text("DELETE FROM FactAnomaliesDetail"))
             conn.execute(text("DELETE FROM DimRecurrentProblems"))
-            print("Anciennes données supprimées")
+            print("✅ Anciennes données supprimées")
         
         # 1. Sauvegarde dans FactAnomaliesDetail
         if not df_anomalies.empty:
@@ -106,7 +109,7 @@ def save_analysis_results(df_anomalies, cluster_results=None):
                 if_exists='append', 
                 index=False
             )
-            print(f"{len(anomalies_to_save)} anomalies sauvegardées dans FactAnomaliesDetail")
+            print(f"✅ {len(anomalies_to_save)} NOUVELLES anomalies sauvegardées dans FactAnomaliesDetail")
         
         # 2. Sauvegarde des clusters dans DimRecurrentProblems
         if cluster_results is not None and not cluster_results.empty:
@@ -122,8 +125,9 @@ def save_analysis_results(df_anomalies, cluster_results=None):
                 if_exists='append', 
                 index=False
             )
-            print(f"{len(clusters_to_save)} problèmes récurrents sauvegardés dans DimRecurrentProblems")
+            print(f"✅ {len(clusters_to_save)} NOUVEAUX problèmes récurrents sauvegardés dans DimRecurrentProblems")
         
+        print("🎯 Sauvegarde terminée avec succès")
         return True
         
     except Exception as e:
