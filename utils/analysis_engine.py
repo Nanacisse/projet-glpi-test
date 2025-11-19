@@ -279,12 +279,12 @@ def run_full_analysis(df):
                 cluster_labels = clustering_model.fit_predict(embeddings)
                 df['ClusterID'] = cluster_labels
                 
-                # Analyse sémantique automatique
+                # ANALYSE SÉMANTIQUE AMÉLIORÉE - VERSION SIMPLIFIÉE SANS REGEX
                 def extract_cluster_info(descriptions):
+                    """Extrait un nom de groupe significatif basé sur la sémantique"""
                     if not descriptions:
                         return "Sans description", "Aucun contenu"
                     
-                    import re
                     from collections import Counter
                     import string
                     
@@ -294,39 +294,86 @@ def run_full_analysis(df):
                     clean_text = all_text.translate(translator)
                     words = clean_text.split()
                     
-                    # Filtrage des mots significatifs
-                    stop_words = {
+                    # STOP WORDS ÉTENDUS - filtrer les noms propres et mots non techniques
+                    extended_stop_words = {
                         'bonjour', 'merci', 'cordialement', 'salut', 'hello',
                         'problème', 'erreur', 'incident', 'souci', 'bug', 'panne',
-                        'suite', 'depuis', 'quelque', 'plusieurs', 'chaque'
+                        'suite', 'depuis', 'quelque', 'plusieurs', 'chaque',
+                        'demande', 'urgent', 'important', 'nécessaire', 'besoin',
+                        'ouattara', 'rosine', 'digitalix', 'yopougon', 'yopstkde', 'incadea',
+                        'madame', 'monsieur', 'utilisateur', 'personne', 'collaborateur'
                     }
                     
+                    # Filtrage des mots significatifs
                     meaningful_words = [
                         word for word in words 
-                        if word not in stop_words and len(word) >= 4
+                        if word not in extended_stop_words and len(word) >= 4
                     ]
                     
-                    # Extraction des mots-clés fréquents
+                    # Catégories techniques prédéfinies pour regrouper par thème
+                    technical_categories = {
+                        'Réseau et Connexion': ['wifi', 'connexion', 'réseau', 'internet', 'vpn', 'connecter', 'accès', 'serveur'],
+                        'Email et Communication': ['mail', 'email', 'messagerie', 'outlook', 'courriel', 'envoyer', 'réception'],
+                        'Matériel et Équipement': ['imprimante', 'ordinateur', 'écran', 'clavier', 'souris', 'scanner', 'portable'],
+                        'Logiciel et Application': ['logiciel', 'application', 'windows', 'office', 'sap', 'installer', 'programme'],
+                        'Sécurité et Accès': ['motdepasse', 'authentification', 'login', 'compte', 'sécurité', 'accès', 'permission'],
+                        'Performance et Support': ['lent', 'bloqué', 'planté', 'support', 'assistance', 'aide', 'ralenti'],
+                        'Installation et Déploiement': ['installation', 'déploiement', 'transfert', 'configuration', 'migration']
+                    }
+                    
+                    # Analyse de fréquence des mots
                     if meaningful_words:
                         word_freq = Counter(meaningful_words)
                         min_occurrences = max(2, len(descriptions) // 10)
                         common_words = [
-                            word for word, count in word_freq.most_common(8) 
+                            word for word, count in word_freq.most_common(10) 
                             if count >= min_occurrences
                         ]
                         
-                        if common_words:
-                            group_name = f"Problèmes {', '.join(common_words[:3])}"
-                            keywords = ", ".join(common_words[:5])
-                            return group_name, keywords
+                        # Déterminer la catégorie principale du cluster
+                        main_category = "Problèmes Techniques"
+                        category_scores = {}
+                        
+                        for category, keywords in technical_categories.items():
+                            score = sum(1 for word in common_words if word in keywords)
+                            if score > 0:
+                                category_scores[category] = score
+                        
+                        if category_scores:
+                            main_category = max(category_scores.items(), key=lambda x: x[1])[0]
+                        
+                        # UNIQUEMENT LE NOM DE LA CATÉGORIE (sans mots-clés)
+                        group_name = main_category
+                        
+                        # Mots-clés pour le détail (dans KeywordMatch)
+                        keywords = ", ".join(common_words[:5]) if common_words else "problème technique"
+                        
+                        return group_name, keywords
                     
-                    # Description par défaut
-                    sample_desc = descriptions[len(descriptions) // 2] if len(descriptions) > 1 else descriptions[0]
+                    # Fallback : analyser la description la plus représentative
+                    if len(descriptions) > 1:
+                        # Prendre la description médiane
+                        sample_desc = descriptions[len(descriptions) // 2]
+                    else:
+                        sample_desc = descriptions[0]
+                    
+                    # Nettoyer et raccourcir la description (SANS REGEX)
                     clean_desc = sample_desc.strip()
+                    
+                    # Identifier le thème principal
+                    theme = "Problème Technique"
+                    for category, keywords in technical_categories.items():
+                        if any(keyword in clean_desc.lower() for keyword in keywords):
+                            theme = category
+                            break
+                    
                     if len(clean_desc) > 70:
                         clean_desc = clean_desc[:70] + "..."
                     
-                    return clean_desc, "problème technique"
+                    # UNIQUEMENT LE NOM DE LA CATÉGORIE
+                    group_name = theme
+                    
+                    return group_name, "analyse technique"
                 
                 # Génération des résultats
                 cluster_data = []
@@ -344,6 +391,11 @@ def run_full_analysis(df):
                 cluster_results = pd.DataFrame(cluster_data)
                 print(f"✅ Clustering terminé: {len(cluster_data)} clusters générés")
                 
+                # Aperçu des clusters générés
+                print("\n📋 Aperçu des clusters :")
+                for i, cluster in enumerate(cluster_data[:8]):
+                    print(f"   {i+1}. {cluster['ProblemNameGroup']} ({cluster['RecurrenceCount']} tickets)")
+                    
         except Exception as e:
             print(f"❌ Erreur clustering: {e}")
 
