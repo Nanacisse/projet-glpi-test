@@ -199,7 +199,7 @@ def generate_anomaly_description(row):
     anomalies = []
     
     if row['ScoreSemantique'] < SEMAN_THRESHOLD * 100:
-        anomalies.append("Description du problème peu claire")
+        anomalies.append("Description du solution peu claire")
     
     if row['ScoreConcordance'] < CONC_THRESHOLD * 100:
         anomalies.append("Solution peu pertinente par rapport au problème")
@@ -249,37 +249,101 @@ def run_full_analysis(df):
     df['AnomalyDescription'] = df.apply(generate_anomaly_description, axis=1)
     
     #Clustering pour problèmes récurrents
-    cluster_results = None
-    if st_model is not None and 'ProblemDescription' in df.columns:
-        try:
-            descriptions = df['ProblemDescription'].astype(str).tolist()
-            if descriptions:
-                embeddings = st_model.encode(descriptions, show_progress_bar=False)
-                n_clusters = min(10, max(2, len(descriptions) // 5))
-                clustering_model = AgglomerativeClustering(n_clusters=n_clusters)
-                cluster_labels = clustering_model.fit_predict(embeddings)
-                
-                df['ClusterID'] = cluster_labels
-                
-                #Préparer les résultats pour DimRecurrentProblems
-                cluster_data = []
-                for cluster_id in range(n_clusters):
-                    cluster_descriptions = df[df['ClusterID'] == cluster_id]['ProblemDescription'].tolist()
-                    if cluster_descriptions:
-                        #Extraire les mots-clés communs
-                        sample_description = cluster_descriptions[0]
-                        
-                        cluster_data.append({
-                            'ProblemNameGroup': f"Cluster_{cluster_id}",
-                            'ClusterID': cluster_id,
-                            'KeywordMatch': f"Cluster de {len(cluster_descriptions)} problèmes similaires",
-                            'RecurrenceCount': len(cluster_descriptions)
-                        })
-                
-                cluster_results = pd.DataFrame(cluster_data)
-                print(f"Clustering terminé: {n_clusters} clusters identifiés")
-                
-        except Exception as e:
-            print(f"Erreur clustering: {e}")
+  # Clustering pour problèmes récurrents - Version épurée
+cluster_results = None
+if st_model is not None and 'ProblemDescription' in df.columns:
+    try:
+        descriptions = df['ProblemDescription'].astype(str).tolist()
+        if descriptions:
+            print(f"🔧 Début du clustering sur {len(descriptions)} tickets...")
             
-    return df, cluster_results
+            # Encodage sémantique
+            embeddings = st_model.encode(descriptions, show_progress_bar=False)
+            
+            # Calcul dynamique des clusters
+            base_tickets = len(descriptions)
+            if base_tickets <= 100:
+                n_clusters = max(3, base_tickets // 10)
+            elif base_tickets <= 1000:
+                n_clusters = min(30, max(10, base_tickets // 25))
+            else:
+                n_clusters = min(60, max(20, base_tickets // 50))
+            
+            print(f"📊 {n_clusters} clusters déterminés")
+            
+            # Clustering
+            clustering_model = AgglomerativeClustering(
+                n_clusters=n_clusters,
+                metric='cosine',
+                linkage='average'
+            )
+            cluster_labels = clustering_model.fit_predict(embeddings)
+            df['ClusterID'] = cluster_labels
+            
+            # Analyse sémantique automatique
+            def extract_cluster_info(descriptions):
+                if not descriptions:
+                    return "Sans description", "Aucun contenu"
+                
+                import re
+                from collections import Counter
+                import string
+                
+                # Nettoyage du texte
+                all_text = " ".join(descriptions).lower()
+                translator = str.maketrans('', '', string.punctuation + string.digits)
+                clean_text = all_text.translate(translator)
+                words = clean_text.split()
+                
+                # Filtrage des mots significatifs
+                stop_words = {
+                    'bonjour', 'merci', 'cordialement', 'salut', 'hello',
+                    'problème', 'erreur', 'incident', 'souci', 'bug', 'panne',
+                    'suite', 'depuis', 'quelque', 'plusieurs', 'chaque'
+                }
+                
+                meaningful_words = [
+                    word for word in words 
+                    if word not in stop_words and len(word) >= 4
+                ]
+                
+                # Extraction des mots-clés fréquents
+                if meaningful_words:
+                    word_freq = Counter(meaningful_words)
+                    min_occurrences = max(2, len(descriptions) // 10)
+                    common_words = [
+                        word for word, count in word_freq.most_common(8) 
+                        if count >= min_occurrences
+                    ]
+                    
+                    if common_words:
+                        group_name = f"Problèmes {', '.join(common_words[:3])}"
+                        keywords = ", ".join(common_words[:5])
+                        return group_name, keywords
+                
+                # Description par défaut
+                sample_desc = descriptions[len(descriptions) // 2] if len(descriptions) > 1 else descriptions[0]
+                clean_desc = sample_desc.strip()
+                if len(clean_desc) > 70:
+                    clean_desc = clean_desc[:70] + "..."
+                
+                return clean_desc, "problème technique"
+            
+            # Génération des résultats
+            cluster_data = []
+            for cluster_id in range(n_clusters):
+                cluster_descriptions = df[df['ClusterID'] == cluster_id]['ProblemDescription'].tolist()
+                if cluster_descriptions:
+                    group_name, keywords = extract_cluster_info(cluster_descriptions)
+                    cluster_data.append({
+                        'ProblemNameGroup': group_name,
+                        'ClusterID': cluster_id,
+                        'KeywordMatch': keywords,
+                        'RecurrenceCount': len(cluster_descriptions)
+                    })
+            
+            cluster_results = pd.DataFrame(cluster_data)
+            print(f"✅ Clustering terminé: {len(cluster_data)} clusters générés")
+            
+    except Exception as e:
+        print(f"❌ Erreur clustering: {e}")
