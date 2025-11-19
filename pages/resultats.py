@@ -137,19 +137,19 @@ def render():
     
     #Score Sémantique (%)
     if 'ScoreSemantique' in df_display.columns:
-        display_columns['Score Sémantique (%)'] = df_display['ScoreSemantique'].apply(lambda x: f"{x:.1f}%")
+        display_columns['Score Sémantique (%)'] = df_display['ScoreSemantique'].apply(lambda x: f"{x:.2f}%")
     
     #Score Concordance (%)
     if 'ScoreConcordance' in df_display.columns:
-        display_columns['Score Concordance (%)'] = df_display['ScoreConcordance'].apply(lambda x: f"{x:.1f}%")
+        display_columns['Score Concordance (%)'] = df_display['ScoreConcordance'].apply(lambda x: f"{x:.2f}%")
     
     #Note Ticket (Base 10)
     if 'TicketNote' in df_display.columns:
-        display_columns['Note Ticket (Base 10)'] = df_display['TicketNote'].apply(lambda x: f"{x:.1f}")
+        display_columns['Note Ticket (Base 10)'] = df_display['TicketNote'].apply(lambda x: f"{x:.2f}")
     
     #Moyenne Employé (/10)
     if 'EmployeeAvgScore' in df_display.columns:
-        display_columns['Moyenne Employé (/10)'] = df_display['EmployeeAvgScore'].apply(lambda x: f"{x:.1f}")
+        display_columns['Moyenne Employé (/10)'] = df_display['EmployeeAvgScore'].apply(lambda x: f"{x:.2f}")
     
     #Statut avec icônes
     if 'Statut' in df_display.columns:
