@@ -2,20 +2,20 @@ import pyodbc
 from sqlalchemy import create_engine, text
 import pandas as pd
 from datetime import datetime
+from sqlalchemy.exc import DBAPIError
 
 # --- CONFIGURATION DE LA CONNEXION ---
-# Correction du SyntaxWarning en utilisant double barre oblique inverse '\\'
+# NOTE: Le nom du serveur utilise la double barre oblique inverse '\\' pour l'échappement.
 SERVER_NAME = 'CIYGSG9030DK\\SQLEXPRESS' 
 DATABASE_NAME = 'GLPI_DWH'
 DRIVER = 'ODBC Driver 17 for SQL Server'
 
 def get_db_connection_url():
-    """Crée l'URL de connexion pour SQLAlchemy."""
-    # Utilisation du nom de serveur corrigé
+    """Crée l'URL de connexion pour SQLAlchemy (avec connexion Windows trusted)."""
     return f"mssql+pyodbc://@{SERVER_NAME}/{DATABASE_NAME}?driver={DRIVER}&trusted_connection=yes"
 
 def get_db_connection():
-    """Crée une connexion directe pyodbc."""
+    """Crée une connexion directe pyodbc (pour les opérations unitaires si nécessaire)."""
     try:
         conn_str = f'DRIVER={DRIVER};SERVER={SERVER_NAME};DATABASE={DATABASE_NAME};Trusted_Connection=yes;'
         return pyodbc.connect(conn_str)
@@ -25,24 +25,27 @@ def get_db_connection():
 
 # Initialisation du moteur SQLAlchemy une seule fois
 try:
-    engine = create_engine(get_db_connection_url())
+    # Utiliser isolation_level='AUTOCOMMIT' pour garantir que les commandes s'exécutent immédiatement
+    engine = create_engine(get_db_connection_url(), connect_args={'autocommit': True})
 except Exception as e:
     print(f"Erreur de connexion SQLAlchemy : {e}")
     engine = None
 
 def load_data_for_analysis():
-    """Charge les données nécessaires pour l'analyse en utilisant votre requête détaillée."""
+    """
+    Charge les données nécessaires pour l'analyse des anomalies (tickets, descriptions, durée).
+    """
     if engine is None:
         print("Erreur: Moteur de base de données non initialisé.")
         return pd.DataFrame()
     
     try:
-        # Votre requête SQL d'origine avec les JOINs
         query = text("""
         SELECT 
             FTP.FactKey,
             FTP.TicketID,
             FTP.AssigneeEmployeeKey,
+            -- Concaténation des noms si disponibles, sinon utiliser AssigneeFullName
             COALESCE(DE.UserFirstname + ' ' + DE.RealName, FTP.AssigneeFullName) AS AssigneeFullName,
             FTP.ProblemDescription,
             FTP.SolutionContent,
@@ -51,6 +54,7 @@ def load_data_for_analysis():
         FROM FactTicketPerformance FTP
         JOIN DimDate DD ON FTP.DateCreationKey = DD.DateKey
         LEFT JOIN DimEmployee DE ON FTP.AssigneeEmployeeKey = DE.EmployeeKey
+        -- Filtres pour s'assurer que nous avons des données exploitables
         WHERE FTP.ProblemDescription IS NOT NULL 
           AND FTP.SolutionContent IS NOT NULL
           AND FTP.ResolutionDurationSec IS NOT NULL
@@ -58,25 +62,35 @@ def load_data_for_analysis():
         ORDER BY DD.FullDate DESC
         """)
         
+        # Lecture des données
         df = pd.read_sql(query, engine)
         
         if not df.empty:
-            # Conversion de la durée de résolution en heures (TempsHeures)
+            # Calcul du temps de résolution en heures
             df['TempsHeures'] = df['ResolutionDurationSec'] / 3600.0
             
         print(f"Données chargées : {len(df)} lignes.")
         return df
         
+    except DBAPIError as e:
+        print(f"Erreur de chargement des données: {e}")
+        return pd.DataFrame()
     except Exception as e:
         print(f"Erreur de chargement des données: {e}")
         return pd.DataFrame()
 
 def delete_old_data(conn):
-    """Supprime les anciennes données des tables de faits et de dimension dans le bon ordre."""
+    """
+    Supprime les anciennes données des tables de faits et de dimension.
+    La suppression est faite dans l'ordre de dépendance (FK en premier).
+    """
     try:
-        # Ordre de suppression : FAIT (dépendant) avant DIMENSION (référencée)
+        # 1. Suppression dans la table de faits (FactAnomaliesDetail)
         conn.execute(text("DELETE FROM FactAnomaliesDetail"))
+        
+        # 2. Suppression dans la table de dimension (DimRecurrentProblems)
         conn.execute(text("DELETE FROM DimRecurrentProblems"))
+        
         conn.commit()
         print("Anciennes données supprimées des tables de faits et de dimension.")
         return True
@@ -88,6 +102,8 @@ def delete_old_data(conn):
 def save_analysis_results(df_anomalies: pd.DataFrame, cluster_results: pd.DataFrame):
     """
     Sauvegarde les résultats d'analyse dans DimRecurrentProblems puis FactAnomaliesDetail.
+    
+    Utilise ClusterID comme clé d'intégration pour les deux tables (PK/FK).
     """
     if engine is None:
         print("Erreur: Moteur de base de données non initialisé.")
@@ -100,12 +116,14 @@ def save_analysis_results(df_anomalies: pd.DataFrame, cluster_results: pd.DataFr
             if not delete_old_data(conn):
                 return False
                 
-            # 2. Sauvegarde des clusters dans DimRecurrentProblems - ORDRE CORRECT : DIMENSION EN PREMIER
+            # 2. Sauvegarde des clusters dans DimRecurrentProblems
             if cluster_results is not None and not cluster_results.empty:
+                # Sélectionner les colonnes qui correspondent à la nouvelle structure de DimRecurrentProblems
                 clusters_to_save = cluster_results[[
                     'ProblemNameGroup', 'ClusterID', 'KeywordMatch', 'RecurrenceCount'
                 ]].copy()
                 
+                # Insertion : ClusterID est la PK, donc l'insertion directe est correcte.
                 clusters_to_save.to_sql(
                     'DimRecurrentProblems', 
                     conn, 
@@ -114,28 +132,24 @@ def save_analysis_results(df_anomalies: pd.DataFrame, cluster_results: pd.DataFr
                 )
                 print(f"{len(clusters_to_save)} problèmes récurrents sauvegardés dans DimRecurrentProblems")
             
-            # 3. Sauvegarde dans FactAnomaliesDetail - ORDRE CORRECT : FAIT EN SECOND
+            # 3. Sauvegarde dans FactAnomaliesDetail
             if not df_anomalies.empty:
-                # Si 'FactKey' n'est pas déjà dans le DataFrame (il devrait l'être par load_data_for_analysis, mais sécurité)
-                if 'FactKey' not in df_anomalies.columns:
-                    df_anomalies['FactKey'] = df_anomalies.index
                 
-                # CORRECTION : Ajout explicite de la colonne 'ClusterID' pour la clé étrangère
                 anomalies_to_save = df_anomalies[[
                     'TicketID', 'FactKey', 'AssigneeEmployeeKey', 'AssigneeFullName',
                     'TicketNote', 'EmployeeAvgScore', 'ScoreSemantique', 'ScoreConcordance',
                     'TempsHeures', 'TempsMoyenHeures', 'EcartTypeHeures', 'ScoreTemporel',
                     'AnomalieTemporelle', 'Statut', 'AnomalyDescription', 
-                    'ClusterID' # NOUVELLE COLONNE AJOUTÉE ICI
+                    'ClusterID' # La clé étrangère maintenant alignée
                 ]].copy()
                 
-                # Remplacement des NaN selon votre logique
+                # Remplacement des NaN par des valeurs par défaut ou zéro pour éviter les erreurs SQL NOT NULL
                 anomalies_to_save = anomalies_to_save.fillna({
                     'TicketNote': 0, 'EmployeeAvgScore': 0, 'ScoreSemantique': 0,
                     'ScoreConcordance': 0, 'TempsHeures': 0, 'TempsMoyenHeures': 0,
                     'EcartTypeHeures': 0, 'ScoreTemporel': 0, 'AnomalieTemporelle': 'Non',
                     'Statut': 'Non Déterminé', 'AnomalyDescription': 'Aucune description',
-                    'ClusterID': 0 # S'assurer que les tickets sans cluster ont une valeur par défaut valide (ex: 0)
+                    'ClusterID': 0 # S'assurer que les tickets sans cluster ont une référence valide (ClusterID=0)
                 })
                 
                 anomalies_to_save.to_sql(
