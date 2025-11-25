@@ -269,8 +269,8 @@ def extract_cluster_info(descriptions):
         'salle', 'magasin', 'magasins', 'siège', 'sièges', 'hadi', 'san', 'pedro', 'rimco', 'hotix', 'digitalix',
         'gabon', 'cameroun', 'bernabe', 'senegal', 'dga', 'envoi', 'transfert', 'barres', 'carte', 'cadeau',
         'stock', 'dos', 'stickers', 
-        'vente', 'flash', 'pegas', 'wingle', 'diesel', 'support', 
-        'navision', 'correction', 'hassan', 'semaine', 'ticket', 'hotel','Ouattara', 'rosine',
+        'vente', 'flash', 'pegas', 'wingle', 'diesel', 'support', 'dpp','gwmdspd',
+        'navision', 'correction', 'hassan', 'semaine', 'ticket', 'hotel','ouattara', 'rosine','pneu',
         'power', 'bbc''css', 'CSS' 'css', 'dpos', 'l', 'j''d', 's' 'c', 'm','ç' 'c', 'n',
         # Les mots-clés techniques sont maintenus pour le SCORING
     ])
