@@ -11,9 +11,9 @@ import string
 # --- Configuration et Initialisation ---
  
 # Définition des constantes d'anomalie
-SEMAN_THRESHOLD = 0.60  # 60% : Score sémantique minimum requis pour le contenu de la solution
-CONC_THRESHOLD = 0.40   # 40% : Score de concordance minimum requis entre problème et solution
-Z_SCORE_THRESHOLD = 2   # |Z| > 2 : Seuil d'anomalie pour le temps de résolution (écarts-types)
+SEMAN_THRESHOLD = 0.60  # 60%
+CONC_THRESHOLD = 0.40   # 40%
+Z_SCORE_THRESHOLD = 2   # |Z| > 2 (Écart-type)
  
 # Initialisation des ressources IA/NLP
 nlp = None
@@ -25,7 +25,7 @@ try:
     st_model = SentenceTransformer('paraphrase-multilingual-mpnet-base-v2')
 except Exception as e:
     print(f"Erreur de chargement des modèles NLP/IA (Vérifiez les dépendances spacy et sentence-transformers) : {e}")
-    # Si les modèles ne chargent pas, le clustering sémantique sera ignoré.
+    # Les variables restent None, et le clustering sera ignoré si st_model est None
 
  
 # --- Fonctions de Calcul de Scores et d'Anomalies ---
@@ -48,12 +48,12 @@ def calculate_semantique_score(text):
         if total_tokens == 0:
             return 0.0
         
-        # 1. Longueur et Structure
+        # Longueur et Structure
         length_score = min(20, total_tokens * 0.5)
         sentences = list(doc.sents)
         structure_score = min(15, len(sentences) * 3)
         
-        # 2. Richesse lexicale et Technique
+        # Richesse lexicale et Technique
         non_stop_words = [token for token in doc if token.is_alpha and not token.is_stop]
         lexical_richness = len(non_stop_words) / total_tokens if total_tokens > 0 else 0
         richness_score = lexical_richness * 30
@@ -63,13 +63,13 @@ def calculate_semantique_score(text):
         technical_count = sum(1 for token in doc if token.text.lower() in technical_terms)
         technical_score = min(20, technical_count * 2)
         
-        # 3. Clarté (faible proportion de mots vides)
+        # Clarté (faible proportion de mots vides)
         stop_word_ratio = sum(1 for token in doc if token.is_stop) / total_tokens
         clarity_score = (1 - stop_word_ratio) * 15
         
         total_score = length_score + structure_score + richness_score + technical_score + clarity_score
         
-        # 4. Pénalités
+        # Pénalités (mots inconnus, phrases trop longues)
         penalties = 0
         unknown_words = sum(1 for token in doc if token.is_oov and token.is_alpha)
         penalties += min(10, unknown_words * 2)
@@ -83,7 +83,8 @@ def calculate_semantique_score(text):
         return round(final_score, 2)
         
     except Exception as e:
-        # Retourne une valeur neutre en cas d'erreur
+        # Retourne une valeur neutre en cas d'erreur de traitement
+        # print(f"Erreur analyse sémantique pour le texte '{text_str[:50]}...': {e}")
         return 50.0
 
 def calculate_concordance_score(problem, solution):
@@ -117,7 +118,7 @@ def calculate_concordance_score(problem, solution):
         else:
             length_score = 0
         
-        # 4. Indices de structure
+        # 4. Indices de structure (étapes, achèvement)
         structure_score = 10 if any(marker in solution_str for marker in ['premièrement', 'étape']) else 5
         completion_score = 10 if any(marker in solution_str for marker in ['terminé', 'fini']) else 0
         
@@ -130,7 +131,8 @@ def calculate_concordance_score(problem, solution):
 
 def calculate_temporal_score(df):
     """
-    Calcule le Z-score temporel pour identifier les anomalies de temps de résolution.
+    Calcule le Z-score temporel (mesure l'écart par rapport à la moyenne)
+    et identifie les anomalies temporelles.
     """
     if df.empty or 'TempsHeures' not in df.columns or df['TempsHeures'].isnull().all():
         df['TempsMoyenHeures'] = 0.0
@@ -140,6 +142,7 @@ def calculate_temporal_score(df):
         return df
         
     mean_h = df['TempsHeures'].mean()
+    # CORRECTION ICI: Utiliser 'TempsHeures' et non 'TemtsHeures'
     std_h = df['TempsHeures'].std() 
     
     std_safe = std_h if std_h > 0 else 1.0e-9 
@@ -150,7 +153,7 @@ def calculate_temporal_score(df):
     # Calcul du Z-Score
     df['ScoreTemporel'] = (df['TempsHeures'] - mean_h) / std_safe
     
-    # Détection d'anomalie (|Z| > Z_SCORE_THRESHOLD)
+    # Détection d'anomalie
     df['AnomalieTemporelle'] = np.where(np.abs(df['ScoreTemporel']) > Z_SCORE_THRESHOLD, 'Oui', 'Non')
     
     return df
@@ -177,10 +180,10 @@ def determine_final_status(row):
     if num_anomalies >= 2:
         return 'Multiples Anomalies'
     
-    return 'Anomalie Indéterminée'
+    return 'Anomalie Indéterminée' # Cas par défaut, devrait rarement arriver
 
 def calculate_ticket_note(row):
-    """Calcule la Note de Ticket (Base 10) par pénalité selon le Statut d'anomalie."""
+    """Calcule la Note de Ticket (Base 10) par pénalité selon le Statut."""
     status = row['Statut']
     
     if status == 'OK':
@@ -192,10 +195,10 @@ def calculate_ticket_note(row):
     elif status == 'Multiples Anomalies':
         return 5.0
     else:
-        return 6.0
+        return 6.0 # Anomalie Indéterminée
 
 def generate_anomaly_description(row):
-    """Génère une description détaillée de l'anomalie pour le rapport."""
+    """Génère une description détaillée de l'anomalie."""
     anomalies = []
     
     if row['ScoreSemantique'] < SEMAN_THRESHOLD * 100:
@@ -214,14 +217,15 @@ def generate_anomaly_description(row):
 
 def extract_cluster_info(descriptions):
     """
-    Extrait un nom de groupe significatif (catégorie technique) et des mots-clés pour un cluster.
+    Extrait un nom de groupe significatif et des mots-clés pour un cluster.
+    Mise à jour pour les 6 catégories demandées + 'Problème Inconnu'.
     """
     if not descriptions or not nlp:
         return "Sans description", "Aucun contenu"
     
     all_text = " ".join(descriptions)
     
-    # 1. Reconnaissance d'Entités Nommées (REN) pour ignorer les noms propres/spécifiques
+    # 1. Reconnaissance d'Entités Nommées (REN) pour ignorer les noms propres
     doc = nlp(all_text)
     entities_to_ignore = set()
     for ent in doc.ents:
@@ -229,7 +233,7 @@ def extract_cluster_info(descriptions):
             entities_to_ignore.add(ent.text.lower())
             entities_to_ignore.update(ent.text.lower().split())
             
-    # 2. Nettoyage et tokenisation
+    # 2. Nettoyage et tokenisation standard avec correction maketrans
     to_replace_punc = string.punctuation.replace('-', '').replace("'", '')
     replace_with_punc = ' ' * len(to_replace_punc)
     to_replace_digits = string.digits
@@ -238,7 +242,7 @@ def extract_cluster_info(descriptions):
     to_replace = to_replace_punc + to_replace_digits
     replace_with = replace_with_punc + replace_with_digits
     
-    # Utilisation sécurisée de maketrans
+    # Sécurité maketrans
     if len(to_replace) != len(replace_with):
         clean_text = re.sub(f'[{re.escape(string.punctuation.replace("-", "").replace("'", "") + string.digits)}]', ' ', all_text.lower())
     else:
@@ -247,14 +251,11 @@ def extract_cluster_info(descriptions):
         
     words = clean_text.split()
     
-    # 3. STOP WORDS ÉTENDUS (Mots vides + Mots génériques)
-    # Les mots-clés techniques essentiels (ex: imprimante, teams) sont MAINTENUS 
-    # pour le scoring de catégorie, mais les mots très génériques sont filtrés.
+    # 3. STOP WORDS ÉTENDUS (Mots vides + Mots génériques à exclure des KW Match)
     extended_stop_words = set(list(spacy.lang.fr.stop_words.STOP_WORDS) + [
-        # Mots vides standards
         'le', 'la', 'les', 'un', 'une', 'des', 'avec', 'pour', 'qui', 'est', 'être', 'avoir', 'faire',
         'dans', 'sur', 'sous', 'vers', 'avant', 'après', 'chez', 'entre', 'sans', 'comme', 'comment',
-        # Termes GLPI/Génériques/Entreprise
+        # Termes GLPI/Génériques
         'glpi', 'ticket', 'demande', 'facture', 'code', 'version', 'numéro', 'id', 'lien', 'demander',
         'bonjour', 'merci', 'suite', 'depuis', 'date', 'jour', 'mois', 'année', 'heure', 'minute',
         'quelque', 'plusieurs', 'chaque', 'urgent', 'important', 'nécessaire', 
@@ -262,18 +263,19 @@ def extract_cluster_info(descriptions):
         'problème', 'erreur', 'incident', 'souci', 'bug', 'panne', 'fixé', 'résolu', 'corrigé', 'réparé', 
         'falloir', 'pouvoir', 'vouloir', 'devoir', 'savoir', 'impossible', 'bloqué', 'technique', 'général', 'cas', 'via',
         'mise', 'jour', 'création', 'ajout', 'modification', 'supprimer', 'archive', 'vide', 'archivage',
-        'gestion', 'ouvrir', 'fonctionne',
-        # Termes spécifiques à ignorer s'ils ne sont pas des indicateurs de catégorie
+        'compte', 'installation', 'connexion', 'gestion', 'ouvrir', 'fonctionne',
         'base', 'timesheet', 'astral', 'hotel', 'lepic', 'lhotel', 'riviera', 'bouquet', 
         'mariage', 'bbci', 'licence', 'client', 'service', 'site', 'serveur', 
         'salle', 'magasin', 'magasins', 'siège', 'sièges', 'hadi', 'san', 'pedro', 'rimco', 'hotix', 'digitalix',
         'gabon', 'cameroun', 'bernabe', 'senegal', 'dga', 'envoi', 'transfert', 'barres', 'carte', 'cadeau',
         'stock', 'dos', 'stickers', 
         'vente', 'flash', 'pegas', 'wingle', 'diesel', 'support', 
-        'navision', 'correction', 'hassan', 'semaine', 'ticket' 
+        'navision', 'correction', 'hassan', 'semaine', 'ticket', 
+        'power', 'bbc'
+        # Les mots-clés techniques sont maintenus pour le SCORING
     ])
     
-    # 4. Filtrage des mots significatifs (qui ne sont pas des stop words étendus ou des entités)
+    # 4. Filtrage des mots significatifs
     meaningful_words = [
         word for word in words 
         if word not in extended_stop_words 
@@ -282,79 +284,54 @@ def extract_cluster_info(descriptions):
         and not word.isdigit()
     ]
     
-    # 5. Catégories techniques (Mots-clés enrichis pour le SCORING)
+    # 5. Catégories techniques (Mots-clés enrichis)
     technical_categories = {
-        'Problème Matériel': ['pc', 'ordinateur', 'portable', 'fixe', 'unité', 'centrale', 'tour', 'desktop', 'laptop', 
-                              'imprimante', 'impression', 'scanner', 'scan', 'photocopieuse', 'mfp', 'toner', 'cartouche', 'recto', 'verso',
-                              'écran', 'moniteur', 'affichage', 'clavier', 'souris', 'casque', 'microphone', 'webcam', 'peripherique', 
-                              'disque', 'dur', 'ssd', 'ram', 'mémoire', 'processeur', 'cpu', 'carte', 'graphique', 'batterie', 'chargeur',
-                              'téléphone', 'voip', 'ip', 'samsung', 'iphone', 'android', 'ipad', 'tablette', 
-                              'matériel', 'hardware', 'réparation', 'changement', 'défectueux', 'chauffe', 'ecran', 'projecteur'],
-                              
-        'Email et Communication': ['mail', 'email', 'messagerie', 'outlook', 'exchange', 'courriel', 'boite', 'archive', 'signature', 
-                                   'calendrier', 'envoi', 'réception', 'spam', 'indésirable', 'bloqué', 'délai', 'quota', 'adresse', 
-                                   'teams', 'whatsapp', 'téléconférence', 'visio', 'conférence', 'zoom', 'skype', 'meeting', 'collaboration', 'contact', 'groupe'],
-                                   
-        'Logiciel et Application': ['logiciel', 'application', 'windows', 'microsoft', 'office', '365', 'suite', 'word', 'excel', 'powerpoint', 
-                                    'onedrive', 'sharepoint', 'teams', 'programme', 'applicatif', 'licence', 'version', 'miseajour', 'ciel', 
-                                    'gestion', 'comptabilité', 'hrm', 'outil', 'base', 'donnée', 'sql', 'oracle', 'bug', 'plantage', 
-                                    'navision', 'sap', 'fiori', 'erp', 'crm', 'développement', 'script', 'macro', 'vba', 'pdf', 
-                                    'adobe', 'acrobat', 'lecture', 'calcul', 'tableau', 'acces', 'power'],
-                                    
-        'Sécurité et Accès': ['motdepasse', 'authentification', 'login', 'compte', 'accès', 'mdp', 'droits', 'autorisation', 'validation', 
-                              'session', 'antivirus', 'firewall', 'vpn', 'sécurité', 'crypto', 'certificat', 'chiffrement', 'mfa', 
-                              'double', 'factor', 'verrouillé', 'piratage', 'phishing', 'spam', 'quarantaine', 'restriction', 'privilège', 
-                              'refusé', 'identifiant', 'débloquer', 'verrouillage', 'biométrie', 'fingerprint', 'empreinte', 'acces'],
-                              
-        'Réseau et Infrastructure': ['wifi', 'connexion', 'réseau', 'internet', 'switch', 'routeur', 'câble', 'fibre', 'box', 'lan', 'wan', 
-                                     'ip', 'dhcp', 'dns', 'proxy', 'partage', 'dossier', 'fichier', 'ftp', 'impossibilité', 'lent', 'debit', 
-                                     'coupure', 'infrastructure', 'serveur', 'stockage', 'cloud', 'azure', 'aws', 'data', 'datacenter', 
-                                     'sauvegarde', 'backup', 'redondance', 'vitesse', 'ralentissement', 'partagé', 'téléchargement', 'upload', 'port', 'dossier', 'fichier'],
-                                     
-        'Installation et Déploiement': ['installation', 'déploiement', 'configuration', 'paramétrage', 'migration', 'transfert', 'nouveau', 
-                                        'poste', 'initiation', 'remplacement', 'déménagement', 'changement', 'formatage', 'réinitialisation', 
-                                        'setup', 'config', 'démarrage', 'arrêt', 'redémarrer', 'image', 'gabarit', 'préparation', 'miseenservice']
+        'Problème Matériel': ['imprimante', 'écran', 'souris', 'clavier', 'casque', 'téléphone', 'batterie', 'pc', 'portable', 'fixe', 'matériel', 'scanner', 'scan', 'disque', 'dur', 'ram', 'carte', 'graphique', 'cpu', 'ecran', 'projecteur', 'peripherique', 'changement', 'reparation', 'impression', 'ssd', 'mémoire', 'toner', 'cartouche', 'mfp', 'tablette', 'mobile'],
+        'Email et Communication': ['mail', 'email', 'messagerie', 'outlook', 'courriel', 'exchange', 'teams', 'whatsapp', 'téléconférence', 'visio', 'conférence', 'boite', 'archive', 'signature', 'calendrier', 'envoi', 'réception', 'spam', 'quota', 'bloqué', 'délai', 'zoom', 'skype', 'meeting', 'contact', 'groupe'],
+        'Logiciel et Application': ['logiciel', 'application', 'windows', 'office', 'sap', 'programme', 'fiori', 'excel', 'word', 'powerpoint', 'adobe', 'suite', 'applicatif', 'licence', 'version', 'miseajour', 'ciel', 'gestion', 'comptabilité', 'hrm', 'outil', 'base', 'donnée', 'bug', 'plantage', 'navision', 'onedrive', 'sharepoint', 'développement', 'script', 'macro', 'vba', 'acrobat'],
+        'Sécurité et Accès': ['motdepasse', 'authentification', 'login', 'compte', 'accès', 'mdp', 'droits', 'autorisation', 'validation', 'session', 'antivirus', 'firewall', 'vpn', 'sécurité', 'crypto', 'certificat', 'chiffrement', 'mfa', 'double', 'factor', 'verrouillé', 'piratage', 'acces', 'privilège', 'restriction', 'phishing', 'biométrie', 'utilisateur'],
+        'Réseau et Communication': ['wifi', 'connexion', 'réseau', 'internet', 'switch', 'routeur', 'câble', 'fibre', 'box', 'lan', 'wan', 'ip', 'partage', 'dossier', 'fichier', 'ftp', 'impossibilité', 'lent', 'debit', 'coupure', 'infrastructure', 'partagé', 'téléchargement', 'dhcp', 'dns', 'proxy', 'cloud', 'azure', 'aws', 'sauvegarde', 'backup', 'vitesse', 'ralentissement'],
+        'Installation et Déploiement': ['installation', 'déploiement', 'configuration', 'migration', 'transfert', 'miseajour', 'parametrage', 'création', 'nouveau', 'poste', 'initiation', 'remplacement', 'transfert', 'déménagement', 'changement', 'formatage', 'reinitialisation', 'setup', 'image', 'gabarit', 'préparation', 'installer']
     }
     
-    group_name = "Problème Inconnu" 
+    group_name = "Problème Inconnu" # La nouvelle catégorie par défaut
     common_words = []
     
     if meaningful_words:
         word_freq = Counter(meaningful_words)
         
-        # 5a. Attribution d'une catégorie prédéfinie (Priorité au score le plus élevé)
+        # 5a. Attribution d'une catégorie prédéfinie (Priorité)
         category_scores = {}
         for category, keywords in technical_categories.items():
-            # Le score est calculé car les mots-clés techniques sont toujours présents dans word_freq
+            # Compte les occurrences des mots-clés techniques
             score = sum(word_freq.get(keyword, 0) for keyword in keywords)
             if score > 0:
                 category_scores[category] = score
         
         if category_scores:
+            # On prend la catégorie avec le plus grand score
             group_name = max(category_scores.items(), key=lambda x: x[1])[0]
             
-        # 5b. Extraction des mots-clés les plus fréquents du cluster
-        min_occurrences = max(2, len(descriptions) // 10) # Seuil dynamique pour pertinence
+        # 5b. Extraction des mots-clés les plus fréquents (pour toutes les catégories)
+        min_occurrences = max(2, len(descriptions) // 10) # Seuil dynamique
         common_words = [
             word for word, count in word_freq.most_common(10) 
             if count >= min_occurrences
         ]
 
-        # 5c. Filtrage final des mots-clés (pour l'affichage)
+        # 5c. Filtrage final des mots-clés
         final_keywords = []
         group_words = set(group_name.lower().split())
-        # Ajout du nom de la catégorie dans la liste d'ignorance pour l'affichage final
         final_ignore_words = extended_stop_words.union(group_words)
         
-        for word in common_words:
+        # Filtre les mots-clés pour éviter de donner le nom de la catégorie comme mot-clé principal
+        for word in common_words[:5]:
             if word not in final_ignore_words:
                 final_keywords.append(word)
-            if len(final_keywords) >= 5: # On limite à 5 mots-clés
-                break
                 
         # 5d. Détermination du KeywordMatch final
         if group_name == "Problème Inconnu":
-            keywords_match = "non définis"
+            keywords_match = "non définis" # Si Inconnu, les mots-clés ne sont pas pertinents
         else:
             keywords_match = ", ".join(final_keywords) if final_keywords else "analyse sémantique"
         
@@ -372,7 +349,7 @@ def run_full_analysis(df):
     
     print(f"Début de l'analyse sur {len(df)} tickets assignés")
     
-    # 1. Initialisation des colonnes de Clustering
+    # 1. Initialisation des colonnes de Clustering (Importante si le clustering échoue)
     df['ClusterID'] = 0 
     
     # 2. Calculs de Scores
@@ -411,9 +388,9 @@ def run_full_analysis(df):
                 embeddings = st_model.encode(valid_descriptions, show_progress_bar=False)
                 
                 base_tickets = len(valid_descriptions)
-                # Nombre de clusters basé sur le volume de tickets (min 3, max 60)
                 n_clusters = min(60, max(3, base_tickets // 50 + 1)) 
                 
+                # Le ClusterID commence à 0
                 clustering_model = AgglomerativeClustering(n_clusters=n_clusters, metric='cosine', linkage='average')
                 clustering_model.fit(embeddings)
                 
@@ -433,29 +410,35 @@ def run_full_analysis(df):
                         })
                 
                 cluster_results = pd.DataFrame(cluster_data)
-                print(f"Clustering terminé: {len(cluster_results)} clusters générés")
+                print(f"✅ Clustering terminé: {len(cluster_results)} clusters générés")
                 
         except Exception as e:
-            print(f"Erreur de Clustering ou de traitement NLP: {e}")
+            print(f"❌ Erreur de Clustering ou de maketrans: {e}")
+            # Si échec, ClusterID reste à 0 pour tous les tickets.
     
     # S'assurer que le ClusterID est un entier
     df['ClusterID'] = df['ClusterID'].fillna(0).astype(int)
     df_anomalies = df.copy()
     
-    # 5. Finalisation des résultats de Clustering
+    # 5. Finalisation des résultats de Clustering (SANS GESTION SPÉCIALE DU CLUSTER ID 0)
     if not cluster_results.empty:
-        # Incrémentation de l'ID pour les deux DataFrames (pour que le cluster 0 commence à 1)
-        df_anomalies['ClusterID'] = df_anomalies['ClusterID'] + 1
-        cluster_results['ClusterID'] = cluster_results['ClusterID'] + 1
+        # Pas d'incrémentation : le ClusterID 0 correspond au premier cluster
         
-        # Ajout du ClusterID 0 (pour les tickets non classés/anomalie)
-        cluster_results.loc[len(cluster_results)] = {
-            'ProblemNameGroup': 'Ticket Non Classé / Anomalie',
-            'ClusterID': 0, # ID 0 utilisé pour les exceptions
-            'KeywordMatch': 'Non applicable',
-            'RecurrenceCount': len(df_anomalies[df_anomalies['ClusterID'] == 0]) 
-        }
+        # Ajout d'une entrée pour les tickets non analysés (ceux restés à ID 0 car description manquante)
+        tickets_restants = len(df_anomalies[df_anomalies['ClusterID'] == 0])
+        if tickets_restants > 0:
+            # S'assurer que le ClusterID 0 correspond bien aux tickets restants ou au premier cluster normal
+            # Si le cluster 0 n'est pas dans les résultats, cela signifie qu'il ne contient que les tickets exclus.
+            if 0 not in cluster_results['ClusterID'].values:
+                 cluster_results.loc[len(cluster_results)] = {
+                    'ProblemNameGroup': 'Ticket Non Analysé (Description Manquante)',
+                    'ClusterID': 0, 
+                    'KeywordMatch': 'Non applicable',
+                    'RecurrenceCount': tickets_restants
+                }
+
         cluster_results = cluster_results.sort_values(by='ClusterID').reset_index(drop=True)
+        
     else:
         # Si le clustering a échoué: tout est assigné à l'ID 0
         df_anomalies['ClusterID'] = 0 
@@ -466,7 +449,7 @@ def run_full_analysis(df):
             'RecurrenceCount': len(df)
         }])
 
-    # 6. Sélection des colonnes finales
+    # 6. Sélection des colonnes pour la table FactAnomaliesDetail
     df_anomalies = df_anomalies[[
         'TicketID', 'FactKey', 'AssigneeEmployeeKey', 'AssigneeFullName', 
         'TicketNote', 'EmployeeAvgScore', 'ScoreSemantique', 'ScoreConcordance',
