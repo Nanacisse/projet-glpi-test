@@ -7,8 +7,6 @@ from sentence_transformers import SentenceTransformer
 import re
 from collections import Counter
 import string
-from sklearn.feature_extraction.text import TfidfVectorizer
-from spacy.lang.fr.stop_words import STOP_WORDS
  
 # --- Configuration et Initialisation ---
  
@@ -21,86 +19,21 @@ Z_SCORE_THRESHOLD = 2   # |Z| > 2 (Écart-type)
 nlp = None
 st_model = None
 try:
-    # Charge le modèle français pour la Reconnaissance d'Entités Nommées (REN) et la Lemmatisation
+    # Charge le modèle français pour la Reconnaissance d'Entités Nommées (REN)
     nlp = spacy.load("fr_core_news_sm") 
     # Charge le modèle Sentence Transformer pour l'encodage sémantique
     st_model = SentenceTransformer('paraphrase-multilingual-mpnet-base-v2')
 except Exception as e:
     print(f"Erreur de chargement des modèles NLP/IA (Vérifiez les dépendances spacy et sentence-transformers) : {e}")
+    # Les variables restent None, et le clustering sera ignoré si st_model est None
 
-# Liste des mots génériques d'exclusion (Stop Words classiques + termes de gestion de ticket)
-BASE_EXCLUSION_WORDS = set(list(STOP_WORDS) + [
-    # Contractions/Lettres courtes à retirer (en minuscule)
-    'l', 'd', 'c', 'j', 's', 'm', 'n', 'y',
-    # Termes GLPI/Génériques/Mots à ignorer
-    'glpi', 'ticket', 'demande', 'facture', 'code', 'version', 'numéro', 'id', 'lien', 'demander',
-    'bonjour', 'merci', 'suite', 'depuis', 'date', 'jour', 'mois', 'année', 'heure', 'minute',
-    'quelque', 'plusieurs', 'chaque', 'urgent', 'important', 'nécessaire', 
-    'besoin', 'utilisateur', 'personne', 'collaborateur', 
-    'problème', 'erreur', 'incident', 'souci', 'bug', 'panne', 'fixé', 'résolu', 'corrigé', 'réparé', 
-    'falloir', 'pouvoir', 'vouloir', 'devoir', 'savoir', 'impossible', 'bloqué', 'technique', 'général', 'cas', 'via',
-    'mise', 'jour', 'création', 'ajout', 'modification', 'supprimer', 'archive', 'vide', 'archivage',
-    'compte', 'installation', 'connexion', 'gestion', 'ouvrir', 'fonctionne', 'base', 'faire', 'avoir', 'etre',
-    # Termes métier fréquemment lemmatisés ou techniques
-    'pc', 'système', 'application', 'logiciel', 'matériel', 'serveur', 'réseau'
-])
-
-# --- Fonctions de Pré-traitement Avancé (Lemmatisation et NER) ---
-
-def preprocess_text(text, lemmatize=True, filter_entities=True):
-    """
-    Nettoie, lemmatise le texte, et filtre les entités nommées (NER).
-    Utilisé pour préparer les données avant l'encodage sémantique et le TF-IDF.
-    
-    Args:
-        text (str): La description du problème à nettoyer.
-        lemmatize (bool): Applique la lemmatisation.
-        filter_entities (bool): Exclut les noms propres (PERSONNE, LIEU, ORG, PROD).
-        
-    Returns:
-        str: Le texte pré-traité.
-    """
-    if not nlp or pd.isna(text) or not text.strip():
-        return ""
-        
-    text_str = str(text).lower().strip()
-    
-    # Remplacement de la ponctuation et des chiffres par des espaces pour isoler les mots
-    text_str = re.sub(f'[{re.escape(string.punctuation.replace("-", "").replace("'", "") + string.digits)}]', ' ', text_str)
-    
-    doc = nlp(text_str)
-    tokens = []
-    
-    entities_to_ignore = set()
-    if filter_entities:
-        # Reconnaissance d'Entités Nommées (NER)
-        entity_labels_to_exclude = ['PER', 'ORG', 'PROD', 'GPE', 'LOC', 'MISC'] 
-        for ent in doc.ents:
-            if ent.label_ in entity_labels_to_exclude:
-                entities_to_ignore.update({ent.text.lower(), ent.lemma_.lower()})
-                
-    
-    for token in doc:
-        # Ignorer les jetons qui ne sont pas alphabétiques ou qui sont des stop words
-        if not token.is_alpha or token.is_stop or token.text in BASE_EXCLUSION_WORDS:
-            continue
-            
-        # Lemmatisation (forme de base du mot)
-        term = token.lemma_.lower() if lemmatize else token.text.lower()
-        
-        # Filtrage des entités nommées et des mots trop courts
-        if term not in entities_to_ignore and len(term) > 2:
-            tokens.append(term)
-            
-    # Rejoint les jetons nettoyés et lemmatisés
-    return " ".join(tokens)
-
-# --- Fonctions de Calcul de Scores et d'Anomalies (Non modifiées) ---
+ 
+# --- Fonctions de Calcul de Scores et d'Anomalies ---
 
 def calculate_semantique_score(text):
     """
     Calcule le score sémantique (0-100) pour une description de solution.
-    Évalue la longueur, la richesse lexicale et la pertinence.
+    Évalue la longueur, la richesse lexicale et la pertinence technique.
     """
     if not nlp or pd.isna(text):
         return 0.0
@@ -151,6 +84,7 @@ def calculate_semantique_score(text):
         
     except Exception as e:
         # Retourne une valeur neutre en cas d'erreur de traitement
+        # print(f"Erreur analyse sémantique pour le texte '{text_str[:50]}...': {e}")
         return 50.0
 
 def calculate_concordance_score(problem, solution):
@@ -208,6 +142,7 @@ def calculate_temporal_score(df):
         return df
         
     mean_h = df['TempsHeures'].mean()
+    # CORRECTION ICI: Utiliser 'TempsHeures' et non 'TemtsHeures'
     std_h = df['TempsHeures'].std() 
     
     std_safe = std_h if std_h > 0 else 1.0e-9 
@@ -245,7 +180,7 @@ def determine_final_status(row):
     if num_anomalies >= 2:
         return 'Multiples Anomalies'
     
-    return 'Anomalie Indéterminée'
+    return 'Anomalie Indéterminée' # Cas par défaut, devrait rarement arriver
 
 def calculate_ticket_note(row):
     """Calcule la Note de Ticket (Base 10) par pénalité selon le Statut."""
@@ -260,7 +195,7 @@ def calculate_ticket_note(row):
     elif status == 'Multiples Anomalies':
         return 5.0
     else:
-        return 6.0
+        return 6.0 # Anomalie Indéterminée
 
 def generate_anomaly_description(row):
     """Génère une description détaillée de l'anomalie."""
@@ -277,82 +212,135 @@ def generate_anomaly_description(row):
     
     return "; ".join(anomalies) if anomalies else "Aucune anomalie détectée"
 
-# --- Fonctions de Clustering et d'Extraction de Mots-clés (MODIFIÉES) ---
+
+# --- Fonctions de Clustering et d'Extraction de Mots-clés ---
 
 def extract_cluster_info(descriptions):
     """
-    Extrait un nom de groupe et des mots-clés significatifs pour un cluster 
-    en utilisant une approche dynamique (TF-IDF) sur le texte pré-traité.
+    Extrait un nom de groupe significatif et des mots-clés pour un cluster.
+    Mise à jour pour les 6 catégories demandées + 'Problème Inconnu'.
     """
     if not descriptions or not nlp:
         return "Sans description", "Aucun contenu"
     
-    # 1. Pré-traitement de chaque description du cluster
-    # On utilise la lemmatisation et le filtre d'entités pour un TF-IDF très ciblé
-    cleaned_descriptions = [preprocess_text(desc, lemmatize=True, filter_entities=True) for desc in descriptions]
-    cleaned_descriptions = [d for d in cleaned_descriptions if d.strip()] # Retirer les descriptions vides après nettoyage
+    all_text = " ".join(descriptions)
     
-    if not cleaned_descriptions:
-        return "Sans contenu après nettoyage", "Aucun mot-clé pertinent"
-
-    # 2. Vectorisation TF-IDF (Pondération et sélection des mots-clés techniques)
-    vectorizer = TfidfVectorizer(
-        ngram_range=(1, 2), 
-        max_df=0.85, 
-        min_df=0.01 
-    )
+    # 1. Reconnaissance d'Entités Nommées (REN) pour ignorer les noms propres
+    doc = nlp(all_text)
+    entities_to_ignore = set()
+    for ent in doc.ents:
+        if ent.label_ in ['PER', 'ORG', 'LOC', 'GPE', 'PROD', 'EVENT']: 
+            entities_to_ignore.add(ent.text.lower())
+            entities_to_ignore.update(ent.text.lower().split())
+            
+    # 2. Nettoyage et tokenisation standard avec correction maketrans
+    to_replace_punc = string.punctuation.replace('-', '').replace("'", '')
+    replace_with_punc = ' ' * len(to_replace_punc)
+    to_replace_digits = string.digits
+    replace_with_digits = ' ' * len(string.digits)
     
-    try:
-        tfidf_matrix = vectorizer.fit_transform(cleaned_descriptions)
-    except ValueError:
-        return "Contenu homogène ou générique", "TF-IDF non applicable"
-
-    feature_names = vectorizer.get_feature_names_out()
+    to_replace = to_replace_punc + to_replace_digits
+    replace_with = replace_with_punc + replace_with_digits
     
-    # 3. Calcul des scores moyens TF-IDF
-    avg_tfidf_scores = tfidf_matrix.mean(axis=0).tolist()[0]
-    tfidf_scores = pd.Series(avg_tfidf_scores, index=feature_names)
+    # Sécurité maketrans
+    if len(to_replace) != len(replace_with):
+        clean_text = re.sub(f'[{re.escape(string.punctuation.replace("-", "").replace("'", "") + string.digits)}]', ' ', all_text.lower())
+    else:
+        translator = str.maketrans(to_replace, replace_with)
+        clean_text = all_text.lower().translate(translator)
+        
+    words = clean_text.split()
     
-    # 4. Extraction des mots-clés les plus importants (Top 5)
-    top_keywords_df = tfidf_scores.sort_values(ascending=False).head(5)
-    final_keywords = top_keywords_df.index.tolist()
+    # 3. STOP WORDS ÉTENDUS (Mots vides + Mots génériques à exclure des KW Match)
+    extended_stop_words = set(list(spacy.lang.fr.stop_words.STOP_WORDS) + [
+        'le', 'la', 'les', 'un', 'une', 'des', 'avec', 'pour', 'qui', 'est', 'être', 'avoir', 'faire',
+        'dans', 'sur', 'sous', 'vers', 'avant', 'après', 'chez', 'entre', 'sans', 'comme', 'comment',
+        # Termes GLPI/Génériques
+        'glpi', 'ticket', 'demande', 'facture', 'code', 'version', 'numéro', 'id', 'lien', 'demander',
+        'bonjour', 'merci', 'suite', 'depuis', 'date', 'jour', 'mois', 'année', 'heure', 'minute',
+        'quelque', 'plusieurs', 'chaque', 'urgent', 'important', 'nécessaire', 
+        'besoin', 'utilisateur', 'personne', 'collaborateur', 
+        'problème', 'erreur', 'incident', 'souci', 'bug', 'panne', 'fixé', 'résolu', 'corrigé', 'réparé', 
+        'falloir', 'pouvoir', 'vouloir', 'devoir', 'savoir', 'impossible', 'bloqué', 'technique', 'général', 'cas', 'via',
+        'mise', 'jour', 'création', 'ajout', 'modification', 'supprimer', 'archive', 'vide', 'archivage',
+        'compte', 'installation', 'connexion', 'gestion', 'ouvrir', 'fonctionne',
+        'base', 'timesheet', 'astral', 'hotel', 'lepic', 'lhotel', 'riviera', 'bouquet', 
+        'mariage', 'bbci', 'licence', 'client', 'service', 'site', 'serveur', 
+        'salle', 'magasin', 'magasins', 'siège', 'sièges', 'hadi', 'san', 'pedro', 'rimco', 'hotix', 'digitalix',
+        'gabon', 'cameroun', 'bernabe', 'senegal', 'dga', 'envoi', 'transfert', 'barres', 'carte', 'cadeau',
+        'stock', 'dos', 'stickers', 
+        'vente', 'flash', 'pegas', 'wingle', 'diesel', 'support', 'dpp','gwmdspd','décembre','dashbord',
+        'navision', 'correction', 'hassan', 'semaine', 'ticket', 'hotel','ouattara', 'rosine','pneu',
+        'power', 'bbc''css', 'CSS' 'css', 'dpos', 'l', 'j''d', 's' 'c', 'm','ç' 'c', 'n',
+        # Les mots-clés techniques sont maintenus pour le SCORING
+    ])
     
-    # --- Attribution de catégorie plus adaptative ---
-
+    # 4. Filtrage des mots significatifs
+    meaningful_words = [
+        word for word in words 
+        if word not in extended_stop_words 
+        and word not in entities_to_ignore 
+        and len(word) >= 3
+        and not word.isdigit()
+    ]
+    
+    # 5. Catégories techniques (Mots-clés enrichis)
     technical_categories = {
-        'Problème Matériel': ['imprimante', 'écran', 'souris', 'clavier', 'casque', 'téléphone', 'fixe', 'matériel', 'scanner', 'scan', 'disque', 'toner', 'cartouche', 'mobile'],
-        'Email et Communication': ['mail', 'email', 'messagerie', 'outlook', 'courriel', 'exchange', 'teams', 'zoom'],
-        'Logiciel et Application': ['windows', 'office', 'sap', 'programme', 'fiori', 'excel', 'word', 'adobe', 'navision', 'onedrive', 'sharepoint', 'acrobat'],
-        'Sécurité et Accès': ['motpasse', 'authentification', 'mdp', 'droits', 'vpn', 'sécurité', 'mfa', 'verrouiller', 'acces', 'connecter'], 
-        'Réseau et Infrastructure': ['wifi', 'reseau', 'internet', 'switch', 'routeur', 'câble', 'fibre', 'lan', 'wan', 'ip', 'cloud', 'azure', 'aws', 'serveur'],
-        'Installation et Déploiement': ['déploiement', 'configuration', 'migration', 'transfert', 'reinitialisation', 'setup', 'image', 'gabarit', 'préparation']
+        'Problème Matériel': ['imprimante', 'écran', 'souris', 'clavier', 'casque', 'téléphone', 'batterie', 'pc', 'portable', 'fixe', 'matériel', 'scanner', 'scan', 'disque', 'dur', 'ram', 'carte', 'graphique', 'cpu', 'ecran', 'projecteur', 'peripherique', 'changement', 'reparation', 'impression', 'ssd', 'mémoire', 'toner', 'cartouche', 'mfp', 'tablette', 'mobile'],
+        'Email et Communication': ['mail', 'email', 'messagerie', 'outlook', 'courriel', 'exchange', 'teams', 'whatsapp', 'téléconférence', 'visio', 'conférence', 'boite', 'archive', 'signature', 'calendrier', 'envoi', 'réception', 'spam', 'quota', 'bloqué', 'délai', 'zoom', 'skype', 'meeting', 'contact', 'groupe'],
+        'Logiciel et Application': ['logiciel', 'application', 'windows', 'office', 'sap', 'programme', 'fiori', 'excel', 'word', 'powerpoint', 'adobe', 'suite', 'applicatif', 'licence', 'version', 'miseajour', 'ciel', 'gestion', 'comptabilité', 'hrm', 'outil', 'base', 'donnée', 'bug', 'plantage', 'navision', 'onedrive', 'sharepoint', 'développement', 'script', 'macro', 'vba', 'acrobat'],
+        'Sécurité et Accès': ['motdepasse', 'authentification', 'login', 'compte', 'accès', 'mdp', 'droits', 'autorisation', 'validation', 'session', 'antivirus', 'firewall', 'vpn', 'sécurité', 'crypto', 'certificat', 'chiffrement', 'mfa', 'double', 'factor', 'verrouillé', 'piratage', 'acces', 'privilège', 'restriction', 'phishing', 'biométrie', 'utilisateur'],
+        'Réseau et Communication': ['wifi', 'connexion', 'réseau', 'internet', 'switch', 'routeur', 'câble', 'fibre', 'box', 'lan', 'wan', 'ip', 'partage', 'dossier', 'fichier', 'ftp', 'impossibilité', 'lent', 'debit', 'coupure', 'infrastructure', 'partagé', 'téléchargement', 'dhcp', 'dns', 'proxy', 'cloud', 'azure', 'aws', 'sauvegarde', 'backup', 'vitesse', 'ralentissement'],
+        'Installation et Déploiement': ['installation', 'déploiement', 'configuration', 'migration', 'transfert', 'miseajour', 'parametrage', 'création', 'nouveau', 'poste', 'initiation', 'remplacement', 'transfert', 'déménagement', 'changement', 'formatage', 'reinitialisation', 'setup', 'image', 'gabarit', 'préparation', 'installer']
     }
     
-    group_name = "Problème Inconnu ou Spécifique" 
-    category_scores = {}
+    group_name = "Problème Inconnu" # La nouvelle catégorie par défaut
+    common_words = []
     
-    # 5. Scoring de catégorie basé sur les mots-clés TF-IDF trouvés
-    for category, keywords in technical_categories.items():
-        score = sum(1 for kw in final_keywords if any(term in kw for term in keywords))
-        if score > 0:
-            category_scores[category] = score
-    
-    if category_scores:
-        group_name = max(category_scores.items(), key=lambda x: x[1])[0]
+    if meaningful_words:
+        word_freq = Counter(meaningful_words)
         
-    # Si le score de catégorie est faible, on utilise les mots-clés TF-IDF pour nommer le groupe
-    if not category_scores or max(category_scores.values()) < 1:
-        if final_keywords:
-            group_name = f"Thème: {final_keywords[0].capitalize()}"
-            if len(final_keywords) > 1:
-                group_name += f" et {final_keywords[1].capitalize()}"
+        # 5a. Attribution d'une catégorie prédéfinie (Priorité)
+        category_scores = {}
+        for category, keywords in technical_categories.items():
+            # Compte les occurrences des mots-clés techniques
+            score = sum(word_freq.get(keyword, 0) for keyword in keywords)
+            if score > 0:
+                category_scores[category] = score
         
-    
-    keywords_match = ", ".join(final_keywords) if final_keywords else "Analyse sémantique IA (TF-IDF)"
-        
-    return group_name, keywords_match
+        if category_scores:
+            # On prend la catégorie avec le plus grand score
+            group_name = max(category_scores.items(), key=lambda x: x[1])[0]
+            
+        # 5b. Extraction des mots-clés les plus fréquents (pour toutes les catégories)
+        min_occurrences = max(2, len(descriptions) // 10) # Seuil dynamique
+        common_words = [
+            word for word, count in word_freq.most_common(10) 
+            if count >= min_occurrences
+        ]
 
-# --- Fonction Principale du Pipeline (MODIFIÉE pour le pré-traitement sémantique) ---
+        # 5c. Filtrage final des mots-clés
+        final_keywords = []
+        group_words = set(group_name.lower().split())
+        final_ignore_words = extended_stop_words.union(group_words)
+        
+        # Filtre les mots-clés pour éviter de donner le nom de la catégorie comme mot-clé principal
+        for word in common_words[:5]:
+            if word not in final_ignore_words:
+                final_keywords.append(word)
+                
+        # 5d. Détermination du KeywordMatch final
+        if group_name == "Problème Inconnu":
+            keywords_match = "non définis" # Si Inconnu, les mots-clés ne sont pas pertinents
+        else:
+            keywords_match = ", ".join(final_keywords) if final_keywords else "analyse sémantique"
+        
+        return group_name, keywords_match
+        
+    return group_name, "non définis"
+
+
+# --- Fonction Principale du Pipeline ---
 
 def run_full_analysis(df):
     """Exécute l'intégralité du pipeline d'analyse IA."""
@@ -361,10 +349,10 @@ def run_full_analysis(df):
     
     print(f"Début de l'analyse sur {len(df)} tickets assignés")
     
-    # 1. Initialisation des colonnes de Clustering
+    # 1. Initialisation des colonnes de Clustering (Importante si le clustering échoue)
     df['ClusterID'] = 0 
     
-    # 2. Calculs de Scores (Basés sur le texte BRUT)
+    # 2. Calculs de Scores
     df['ScoreSemantique'] = df['SolutionContent'].apply(calculate_semantique_score)
     df['ScoreConcordance'] = df.apply(
         lambda row: calculate_concordance_score(row['ProblemDescription'], row['SolutionContent']),
@@ -386,69 +374,61 @@ def run_full_analysis(df):
     
     df['AnomalyDescription'] = df.apply(generate_anomaly_description, axis=1)
     
-    # 4. Clustering Sémantique (Regroupement final)
+    # 4. Clustering (seulement si le modèle est chargé)
     cluster_results = pd.DataFrame() 
     
     if st_model is not None and 'ProblemDescription' in df.columns:
         try:
-            # 4.a. Pré-traitement de TOUTES les descriptions pour l'encodage Sémantique
-            df['CleanedDescription'] = df['ProblemDescription'].apply(
-                lambda x: preprocess_text(x, lemmatize=True, filter_entities=True)
-            )
-
-            # 4.b. Filtration des données valides pour le clustering
-            valid_data = df[df['CleanedDescription'].notna() & (df['CleanedDescription'].str.strip() != '')]
+            valid_data = df[df['ProblemDescription'].notna() & (df['ProblemDescription'].str.strip() != '')]
             valid_indices = valid_data.index.tolist()
-            valid_descriptions = valid_data['CleanedDescription'].tolist()
-            
-            # Utilisation des descriptions nettoyées pour la Vectorisation Sémantique (Sentence Transformer)
+            valid_descriptions = valid_data['ProblemDescription'].tolist()
+
             if len(valid_descriptions) > 1:
-                print(f"🔧 Début du clustering sémantique sur {len(valid_descriptions)} descriptions nettoyées...")
-                # Note: Cette étape est la plus coûteuse en temps
+                print(f"🔧 Début du clustering sur {len(valid_descriptions)} tickets...")
                 embeddings = st_model.encode(valid_descriptions, show_progress_bar=False)
                 
                 base_tickets = len(valid_descriptions)
-                # Calcule le nombre de clusters de manière dynamique (max 60 clusters)
-                n_clusters = min(60, max(2, base_tickets // 50 + 1)) 
+                n_clusters = min(60, max(3, base_tickets // 50 + 1)) 
                 
-                # Algorithme de Clustering (Agglomerative)
+                # Le ClusterID commence à 0
                 clustering_model = AgglomerativeClustering(n_clusters=n_clusters, metric='cosine', linkage='average')
                 clustering_model.fit(embeddings)
                 
                 cluster_mapping = pd.Series(clustering_model.labels_, index=valid_indices)
                 df.loc[valid_indices, 'ClusterID'] = cluster_mapping.values
                 
-                # 4.c. Extraction des informations de cluster
                 cluster_data = []
                 for cluster_id in range(n_clusters):
-                    cluster_descriptions_original = df[df['ClusterID'] == cluster_id]['ProblemDescription'].tolist()
-                    if cluster_descriptions_original:
-                        # Utilise la fonction TF-IDF dynamique
-                        group_name, keywords = extract_cluster_info(cluster_descriptions_original)
+                    cluster_descriptions = df[df['ClusterID'] == cluster_id]['ProblemDescription'].tolist()
+                    if cluster_descriptions:
+                        group_name, keywords = extract_cluster_info(cluster_descriptions)
                         cluster_data.append({
                             'ProblemNameGroup': group_name,
                             'ClusterID': cluster_id,
                             'KeywordMatch': keywords,
-                            'RecurrenceCount': len(cluster_descriptions_original)
+                            'RecurrenceCount': len(cluster_descriptions)
                         })
                 
                 cluster_results = pd.DataFrame(cluster_data)
                 print(f"✅ Clustering terminé: {len(cluster_results)} clusters générés")
                 
         except Exception as e:
-            print(f"❌ Erreur de Clustering ou de Vectorisation: {e}")
+            print(f"❌ Erreur de Clustering ou de maketrans: {e}")
+            # Si échec, ClusterID reste à 0 pour tous les tickets.
     
-    # 5. Nettoyage de la colonne temporaire 'CleanedDescription'
-    if 'CleanedDescription' in df.columns:
-        df = df.drop(columns=['CleanedDescription'])
-        
+    # S'assurer que le ClusterID est un entier
     df['ClusterID'] = df['ClusterID'].fillna(0).astype(int)
     df_anomalies = df.copy()
     
-    # 6. Finalisation des résultats de Clustering
+    # 5. Finalisation des résultats de Clustering (SANS GESTION SPÉCIALE DU CLUSTER ID 0)
     if not cluster_results.empty:
+        # Pas d'incrémentation : le ClusterID 0 correspond au premier cluster
+        
+        # Ajout d'une entrée pour les tickets non analysés (ceux restés à ID 0 car description manquante)
         tickets_restants = len(df_anomalies[df_anomalies['ClusterID'] == 0])
         if tickets_restants > 0:
+            # S'assurer que le ClusterID 0 correspond bien aux tickets restants ou au premier cluster normal
+            # Si le cluster 0 n'est pas dans les résultats, cela signifie qu'il ne contient que les tickets exclus.
             if 0 not in cluster_results['ClusterID'].values:
                  cluster_results.loc[len(cluster_results)] = {
                     'ProblemNameGroup': 'Ticket Non Analysé (Description Manquante)',
@@ -460,6 +440,7 @@ def run_full_analysis(df):
         cluster_results = cluster_results.sort_values(by='ClusterID').reset_index(drop=True)
         
     else:
+        # Si le clustering a échoué: tout est assigné à l'ID 0
         df_anomalies['ClusterID'] = 0 
         cluster_results = pd.DataFrame([{
             'ProblemNameGroup': 'Échec de Classification IA',
@@ -468,7 +449,7 @@ def run_full_analysis(df):
             'RecurrenceCount': len(df)
         }])
 
-    # 7. Sélection des colonnes pour la table FactAnomaliesDetail
+    # 6. Sélection des colonnes pour la table FactAnomaliesDetail
     df_anomalies = df_anomalies[[
         'TicketID', 'FactKey', 'AssigneeEmployeeKey', 'AssigneeFullName', 
         'TicketNote', 'EmployeeAvgScore', 'ScoreSemantique', 'ScoreConcordance',
@@ -478,4 +459,3 @@ def run_full_analysis(df):
     ]].copy()
     
     return df_anomalies, cluster_results
-
