@@ -1,25 +1,27 @@
 import streamlit as st
+import base64
 from utils.db_connector import load_data_for_analysis, save_analysis_results
 from utils.analysis_engine import run_full_analysis
-import base64
+
 
 def get_base64_encoded_image(image_path):
     """Encode une image en base64 pour l'affichage HTML."""
     try:
         with open(image_path, "rb") as img_file:
             return base64.b64encode(img_file.read()).decode()
-    except:
+    except Exception:
         return ""
+
 
 def start_analysis():
     """Fonction pour lancer l'analyse complète avec sauvegarde en base."""
     st.session_state['analysis_started'] = True
     
-    #st.empty() pour gérer les messages de fin
+    # st.empty() pour gérer les messages de fin
     status_message_placeholder = st.empty()
     
     with st.spinner('Analyse en cours...'):
-        #Chargement des données
+        # Chargement des données
         data_to_analyze = load_data_for_analysis()
         
         if data_to_analyze is None or data_to_analyze.empty:
@@ -27,21 +29,22 @@ def start_analysis():
             st.session_state['analysis_started'] = False
             return
             
-        #Exécution du moteur d'analyse
+        # Exécution du moteur d'analyse et récupération des deux DataFrames
         df_anomalies, cluster_results = run_full_analysis(data_to_analyze)
         
-        #Sauvegarde dans la base de données
+        # Sauvegarde dans la base de données en passant les deux DataFrames
         save_success = save_analysis_results(df_anomalies, cluster_results)
         
-        #Stockage du résultat dans l'état de la session
+        # Stockage des résultats dans l'état de la session
         st.session_state['anomaly_data'] = df_anomalies
+        st.session_state['cluster_data'] = cluster_results  # Résultats du clustering (DimRecurrentProblems)
         st.session_state['pagination_offset'] = 0
         
-    #Affichage du résultat final après l'analyse
+    # Affichage du résultat final après l'analyse
     if save_success:
         status_message_placeholder.success("Analyse terminée et résultats sauvegardés en base de données.")
         
-        #Affichage automatique de la Page 2 après succès
+        # Affichage automatique de la Page 2 après succès
         st.session_state['current_page'] = 2
         st.rerun() 
     else:
@@ -52,7 +55,7 @@ def start_analysis():
 def render():
     """Affiche le contenu de la Page 1."""
     
-    #Vérification et initialisation des variables de session
+    # Vérification et initialisation des variables de session
     if 'current_page' not in st.session_state:
         st.session_state['current_page'] = 1
     if 'analysis_started' not in st.session_state:
@@ -60,15 +63,15 @@ def render():
     if 'pagination_offset' not in st.session_state:
         st.session_state['pagination_offset'] = 0
     
-    #Si on est déjà sur la page 2, on laisse app.py gérer l'affichage
+    # Si on est déjà sur la page 2, on laisse app.py gérer l'affichage
     if st.session_state.get('current_page') == 2:
         return
 
-    #Charger les images en base64
+    # Charger les images en base64
     ai_icon = get_base64_encoded_image("styles/icones/ai_icon.png")
     analyze_icon = get_base64_encoded_image("styles/icones/analyze.png")
 
-    #Appliquer le style CSS
+    # Appliquer le style CSS
     st.markdown(f"""
     <style>
     #analyze-frame {{
@@ -162,12 +165,12 @@ def render():
     </style>
     """, unsafe_allow_html=True)
 
-    #Conteneur principal centré
+    # Conteneur principal centré
     with st.container():
-        #Espacement en haut
+        # Espacement en haut
         st.markdown("<div style='height: 50px;'></div>", unsafe_allow_html=True)
         
-        #En-tête avec le nom du système et l'icône AI
+        # En-tête avec le nom du système et l'icône AI
         st.markdown(f"""
         <div class='system-title'>
             <img src="data:image/png;base64,{ai_icon}">
@@ -175,23 +178,24 @@ def render():
         </div>
         """, unsafe_allow_html=True)
         
-        #Colonnes pour centrer le contenu
+        # Colonnes pour centrer le contenu
         col1, col2, col3 = st.columns([1, 2, 1])
         
         with col2:
             with st.container():
                 st.markdown('<div id="analyze-frame"></div>', unsafe_allow_html=True)
 
-                #Texte d'instruction
+                # Texte d'instruction
                 st.markdown("""
-                    <div class='analyze-instruction'>
-                        Cliquez sur le bouton ci-dessous pour lancer l'analyse
-                    </div>
+                <div class='analyze-instruction'>
+                    Cliquez sur le bouton ci-dessous pour lancer l'analyse
+                </div>
                 """, unsafe_allow_html=True)
                 
-                #Bouton d'analyse
+                # Bouton d'analyse
                 if st.button("Analyser maintenant", key="analyze_trigger", use_container_width=True):
                     start_analysis()
-                
+
+
 if __name__ == "__main__":
     render()
