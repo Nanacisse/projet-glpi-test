@@ -55,16 +55,13 @@ def get_base64_encoded_image(image_path):
 
 def get_status_with_icon(status):
     """Retourne le statut avec l'icône correspondante."""
-    icon_mapping = {
-        'OK': 'status_ok.png',
-        'Anomalie de Temps': 'danger.png',
-        'Anomalie Sémantique': 'danger.png',
-        'Anomalie de Concordance': 'danger.png',
-        'Multiples Anomalies': 'red.png',
-        'Anomalie Indéterminée': 'danger.png'
-    }
+    if status == 'OK':
+        icon_file = 'status_ok.png'
+    elif status == 'Multiples Anomalies':
+        icon_file = 'red.png'
+    else:
+        icon_file = 'danger.png'
     
-    icon_file = icon_mapping.get(status, 'danger.png')
     try:
         icon_base64 = get_base64_encoded_image(f"styles/icones/{icon_file}")
         icon_html = f'<img src="data:image/png;base64,{icon_base64}" width="16" height="16" style="vertical-align: middle; margin-left: 5px;">'
@@ -86,36 +83,6 @@ def render():
     if df_data is None or (isinstance(df_data, pd.DataFrame) and df_data.empty):
         st.warning("Aucune donnée d'anomalie disponible. Veuillez lancer l'analyse d'abord.")
         return
-    
-    total_tickets = len(df_data)
-    if 'TempsHeures' in df_data.columns:
-        temps_moyen = df_data['TempsHeures'].mean()
-        ecart_type = df_data['TempsHeures'].std()
-    else:
-        temps_moyen = 0
-        ecart_type = 0
-    
-    st.markdown(f"""
-    <div style='background-color: #f8f9fa; padding: 15px; border-radius: 10px; margin-bottom: 20px; border: 1px solid #ddd;'>
-        <div style='text-align: center; margin-bottom: 10px; font-weight: bold; color: #2e2a80;'>
-            STATISTIQUES GLOBALES
-        </div>
-        <div style='display: flex; justify-content: space-around;'>
-            <div style='text-align: center;'>
-                <div style='font-size: 20px; font-weight: bold; color: #2e2a80;'>{total_tickets}</div>
-                <div style='font-size: 12px; color: #666;'>Total Tickets</div>
-            </div>
-            <div style='text-align: center;'>
-                <div style='font-size: 20px; font-weight: bold; color: #2e2a80;'>{temps_moyen:.2f}h</div>
-                <div style='font-size: 12px; color: #666;'>Temps Moyen</div>
-            </div>
-            <div style='text-align: center;'>
-                <div style='font-size: 20px; font-weight: bold; color: #2e2a80;'>{ecart_type:.2f}h</div>
-                <div style='font-size: 12px; color: #666;'>Écart Type</div>
-            </div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
     
     df_display = df_data.copy()
     
@@ -164,6 +131,7 @@ def render():
     </div>
     """, unsafe_allow_html=True)
 
+    # Filtres
     col1, col2, col3, col4 = st.columns([0.23, 0.23, 0.23, 0.31])
     
     with col1:
@@ -174,8 +142,9 @@ def render():
             employe_filtre = 'Tous'
     
     with col2:
-        types_anomalie = ['Tous'] + sorted(df_data['Statut'].unique().tolist())
-        type_filtre = st.selectbox("Type d'anomalie", types_anomalie)
+        all_statuses = ['Tous', 'OK', 'Anomalie de Temps', 'Anomalie Sémantique', 
+                       'Anomalie de Concordance', 'Multiples Anomalies', 'Anomalie Indéterminée']
+        type_filtre = st.selectbox("Type d'anomalie", all_statuses)
     
     with col3:
         if 'DateCreation' in df_data.columns:
@@ -197,6 +166,7 @@ def render():
         else:
             date_filtre = None
 
+    # Application des filtres
     df_filtre = df_data.copy()
     
     if employe_filtre != 'Tous' and 'AssigneeFullName' in df_filtre.columns:
@@ -258,6 +228,38 @@ def render():
             except Exception as e:
                 st.error(f"Erreur export {export_format}: {str(e)}")
 
+    # Statistiques simplifiées
+    total_tickets = len(df_filtre)
+    
+    if 'TempsHeures' in df_filtre.columns:
+        temps_moyen = df_filtre['TempsHeures'].mean()
+        ecart_type = df_filtre['TempsHeures'].std()
+    else:
+        temps_moyen = 0
+        ecart_type = 0
+    
+    st.markdown(f"""
+    <div style='display: flex; justify-content: space-between; margin: 10px 0 20px 0; padding: 10px 0; border-bottom: 1px solid #eee;'>
+        <div style='text-align: center; flex: 1;'>
+            <div style='font-size: 14px; font-weight: bold; color: #2e2a80;'>Total Tickets</div>
+            <div style='font-size: 18px; font-weight: bold; color: #333;'>{total_tickets}</div>
+        </div>
+        <div style='text-align: center; flex: 1;'>
+            <div style='font-size: 14px; font-weight: bold; color: #2e2a80;'>Temps Moyen Résolution</div>
+            <div style='font-size: 18px; font-weight: bold; color: #333;'>{temps_moyen:.2f}h</div>
+        </div>
+        <div style='text-align: center; flex: 1;'>
+            <div style='font-size: 14px; font-weight: bold; color: #2e2a80;'>Écart Type</div>
+            <div style='font-size: 18px; font-weight: bold; color: #333;'>{ecart_type:.2f}h</div>
+        </div>
+        <div style='text-align: center; flex: 1;'>
+            <div style='font-size: 14px; font-weight: bold; color: #2e2a80;'>SLA</div>
+            <div style='font-size: 18px; font-weight: bold; color: #333;'>4H</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Affichage du tableau
     if not df_display_filtre.empty:
         LINES_PER_PAGE = 50
         total_lines = len(df_display_filtre)
@@ -285,6 +287,7 @@ def render():
         
         st.markdown(df_page.to_html(escape=False, index=False), unsafe_allow_html=True)
         
+        # Pagination
         nav_col1, nav_col2, nav_col3 = st.columns([1, 2, 1])
 
         with nav_col1:

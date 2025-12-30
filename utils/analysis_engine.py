@@ -1,461 +1,655 @@
 import pandas as pd
 import numpy as np
 import spacy
-from difflib import SequenceMatcher
 from sklearn.cluster import AgglomerativeClustering
 from sentence_transformers import SentenceTransformer
 import re
 from collections import Counter
 import string
- 
+import language_tool_python
+from sklearn.metrics.pairwise import cosine_similarity
+from typing import List, Dict, Tuple
+
 # --- Configuration et Initialisation ---
- 
+
 # Définition des constantes d'anomalie
-SEMAN_THRESHOLD = 0.60  # 60%
-CONC_THRESHOLD = 0.40   # 40%
-Z_SCORE_THRESHOLD = 2   # |Z| > 2 (Écart-type)
- 
-# Initialisation des ressources IA/NLP
+SEMAN_THRESHOLD = 0.80  # 80% pour la sémantique
+CONC_THRESHOLD = 0.20   # 20% pour la concordance
+SLA_THRESHOLD = 4.0     # 4 heures pour le SLA
+
+# Initialisation des ressources
 nlp = None
 st_model = None
-try:
-    # Charge le modèle français pour la Reconnaissance d'Entités Nommées (REN)
-    nlp = spacy.load("fr_core_news_sm") 
-    # Charge le modèle Sentence Transformer pour l'encodage sémantique
-    st_model = SentenceTransformer('paraphrase-multilingual-mpnet-base-v2')
-except Exception as e:
-    print(f"Erreur de chargement des modèles NLP/IA (Vérifiez les dépendances spacy et sentence-transformers) : {e}")
-    # Les variables restent None, et le clustering sera ignoré si st_model est None
+tool = None
 
- 
-# --- Fonctions de Calcul de Scores et d'Anomalies ---
+try:
+    nlp = spacy.load("fr_core_news_sm")
+    st_model = SentenceTransformer('paraphrase-multilingual-mpnet-base-v2')
+    tool = language_tool_python.LanguageTool('fr')
+    print("Modèles NLP chargés avec succès")
+except Exception as e:
+    print(f"Erreur de chargement des modèles: {e}")
+
+# --- Nouvelle analyse sémantique ---
+
+def detect_vague_words_automatically(text: str, doc) -> List[str]:
+    """
+    Détecte automatiquement les mots vagues dans un texte.
+    Utilise la grammaire et le contexte pour identifier les mots vagues.
+    """
+    vague_words = []
+    
+    try:
+        modal_verbs = ['pouvoir', 'devoir', 'falloir', 'vouloir', 'sembler']
+        
+        uncertainty_adverbs = ['peut-être', 'probablement', 'éventuellement', 
+                              'possiblement', 'apparemment', 'normalement',
+                              'habituellement', 'généralement', 'souvent']
+        
+        generic_verbs = ['faire', 'mettre', 'prendre', 'voir', 'dire', 
+                        'donner', 'rendre', 'laisser', 'passer']
+        
+        for token in doc:
+            if token.lemma_ in modal_verbs and len(list(token.children)) < 2:
+                vague_words.append(token.text)
+            elif token.text.lower() in uncertainty_adverbs:
+                vague_words.append(token.text)
+            elif (token.pos_ == 'VERB' and token.lemma_ in generic_verbs and
+                  not any(child.dep_ == 'obj' for child in token.children)):
+                vague_words.append(token.text)
+        
+        sentences = list(doc.sents)
+        for sent in sentences:
+            words = [token.text.lower() for token in sent if token.is_alpha]
+            unique_words = set(words)
+            
+            if len(words) < 8 and len(unique_words) < 6:
+                vague_words.append("phrase_generique")
+        
+        return list(set(vague_words))
+        
+    except Exception as e:
+        print(f"Erreur détection mots vagues: {e}")
+        return []
+
+def detect_structural_elements_automatically(doc) -> int:
+    """
+    Détecte automatiquement les éléments de structure dans un texte.
+    Retourne le nombre d'étapes identifiées.
+    """
+    try:
+        etapes_count = 0
+        sentences = list(doc.sents)
+        
+        if not sentences:
+            return 0
+        
+        numerical_markers = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10',
+                            'premier', 'deuxième', 'troisième', 'quatrième',
+                            'premièrement', 'deuxièmement', 'troisièmement']
+        
+        temporal_markers = ['ensuite', 'puis', 'après', 'alors', 'maintenant',
+                           'finalement', 'enfin', 'ensuite']
+        
+        logical_markers = ['d\'abord', 'première étape', 'deuxième étape',
+                          'étape suivante', 'dernière étape', 'étape finale']
+        
+        conditional_patterns = [r'si .* alors', r'lorsque .* donc',
+                               r'après avoir .* ensuite']
+        
+        for sent in sentences:
+            sent_text = sent.text.lower()
+            
+            for marker in numerical_markers + temporal_markers + logical_markers:
+                if marker in sent_text:
+                    etapes_count += 1
+                    break
+            
+            for pattern in conditional_patterns:
+                if re.search(pattern, sent_text):
+                    etapes_count += 1
+                    break
+        
+        return min(4, etapes_count)
+        
+    except Exception as e:
+        print(f"Erreur détection structure: {e}")
+        return 0
 
 def calculate_semantique_score(text):
     """
-    Calcule le score sémantique (0-100) pour une description de solution.
-    Évalue la longueur, la richesse lexicale et la pertinence technique.
+    Calcule le score sémantique selon les 4 critères:
+    1. Longueur des phrases (30 points)
+    2. Structure logique (20 points) - DÉTECTION AUTOMATIQUE
+    3. Qualité grammaticale (30 points)
+    4. Détection des mots vagues (20 points) - DÉTECTION AUTOMATIQUE
+    Total: 100 points convertis en pourcentage
     """
-    if not nlp or pd.isna(text):
+    if pd.isna(text) or not isinstance(text, str):
+        return 0.0
+    
+    text_str = str(text).strip()
+    if not text_str:
         return 0.0
     
     try:
-        text_str = str(text)
-        if len(text_str.strip()) == 0:
-            return 0.0
-            
         doc = nlp(text_str)
-        total_tokens = len(doc)
-        if total_tokens == 0:
+        sentences = list(doc.sents)
+        
+        if not sentences:
             return 0.0
         
-        # Longueur et Structure
-        length_score = min(20, total_tokens * 0.5)
-        sentences = list(doc.sents)
-        structure_score = min(15, len(sentences) * 3)
+        longueur_score = 30
+        for sent in sentences:
+            word_count = len([token for token in sent if not token.is_punct])
+            if word_count > 25:
+                longueur_score -= 5
+                break
         
-        # Richesse lexicale et Technique
-        non_stop_words = [token for token in doc if token.is_alpha and not token.is_stop]
-        lexical_richness = len(non_stop_words) / total_tokens if total_tokens > 0 else 0
-        richness_score = lexical_richness * 30
+        etapes_trouvees = detect_structural_elements_automatically(doc)
+        structure_score = etapes_trouvees * 5
+        structure_score = min(20, structure_score)
         
-        technical_terms = ['erreur', 'bug', 'problème', 'solution', 'correct', 
-                           'résoudre', 'incident', 'technique', 'corriger', 'réparer']
-        technical_count = sum(1 for token in doc if token.text.lower() in technical_terms)
-        technical_score = min(20, technical_count * 2)
+        grammaire_score = 30
+        if tool:
+            try:
+                matches = tool.check(text_str)
+                nb_fautes = len(matches)
+                nb_mots = len([token for token in doc if token.is_alpha])
+                if nb_mots > 0:
+                    taux_fautes = nb_fautes / nb_mots
+                    grammaire_score = 30 * (1 - min(taux_fautes, 1))
+            except:
+                grammaire_score = 15
         
-        # Clarté (faible proportion de mots vides)
-        stop_word_ratio = sum(1 for token in doc if token.is_stop) / total_tokens
-        clarity_score = (1 - stop_word_ratio) * 15
+        mots_vagues_trouves = detect_vague_words_automatically(text_str, doc)
+        vague_score = 20 - (len(mots_vagues_trouves) * 4)
+        vague_score = max(0, vague_score)
         
-        total_score = length_score + structure_score + richness_score + technical_score + clarity_score
+        total_points = longueur_score + structure_score + grammaire_score + vague_score
+        pourcentage = (total_points / 100) * 100
         
-        # Pénalités (mots inconnus, phrases trop longues)
-        penalties = 0
-        unknown_words = sum(1 for token in doc if token.is_oov and token.is_alpha)
-        penalties += min(10, unknown_words * 2)
-        
-        if sentences and total_tokens > 0:
-            avg_sentence_length = total_tokens / len(sentences)
-            if avg_sentence_length > 25:
-                penalties += 10
-        
-        final_score = max(0, min(100, total_score - penalties))
-        return round(final_score, 2)
+        return min(100, round(pourcentage, 2))
         
     except Exception as e:
-        # Retourne une valeur neutre en cas d'erreur de traitement
-        # print(f"Erreur analyse sémantique pour le texte '{text_str[:50]}...': {e}")
+        print(f"Erreur analyse sémantique: {e}")
         return 50.0
 
+def calculate_note_semantique(score_semantique):
+    """Convertit le score sémantique (%) en note sur 10."""
+    return round((score_semantique / 100) * 10, 2)
+
+# --- Nouvelle analyse de concordance ---
+
+def detect_resolution_keywords_automatically(solution_text: str, doc) -> bool:
+    """
+    Détecte automatiquement si la solution contient des mots-clés de résolution.
+    Retourne True si au moins un mot-clé de résolution est détecté.
+    """
+    try:
+        solution_lower = solution_text.lower()
+        
+        resolution_patterns = [
+            r'problème (?:est|a été) (?:résolu|corrigé|réparé|fixé)',
+            r'(?:j\'ai|nous avons) (?:résolu|corrigé|réparé)',
+            r'solution (?:est|a été) (?:trouvée|appliquée|mise en œuvre)',
+            r'ticket (?:est|a été) (?:clôturé|fermé|terminé)',
+            r'incident (?:est|a été) (?:traité|réglé)'
+        ]
+        
+        for pattern in resolution_patterns:
+            if re.search(pattern, solution_lower):
+                return True
+        
+        resolution_verbs = ['résoudre', 'corriger', 'réparer', 'fixer',
+                           'terminer', 'clôturer', 'traiter', 'régler']
+        
+        for token in doc:
+            if token.lemma_ in resolution_verbs and token.pos_ == 'VERB':
+                children = list(token.children)
+                if not any(child.dep_ == 'neg' for child in children):
+                    return True
+        
+        resolution_nouns = ['solution', 'résolution', 'correction', 'réparation']
+        
+        for token in doc:
+            if token.lemma_ in resolution_nouns and token.pos_ == 'NOUN':
+                return True
+        
+        return False
+        
+    except Exception as e:
+        print(f"Erreur détection mots-clés résolution: {e}")
+        return False
+
+def detect_completion_indicators_automatically(solution_text: str, doc) -> bool:
+    """
+    Détecte automatiquement si la solution contient des indicateurs de complétion.
+    Retourne True si au moins un indicateur est détecté.
+    """
+    try:
+        solution_lower = solution_text.lower()
+        
+        completion_patterns = [
+            r'(?:a été|est) (?:validé|vérifié|testé|confirmé)',
+            r'(?:j\'ai|nous avons) (?:vérifié|testé|validé)',
+            r'(?:fonctionne|opérationnel|en marche) (?:correctement|normalement)',
+            r'(?:mise en œuvre|implémentation) (?:terminée|achevée|complète)',
+            r'(?:installation|configuration) (?:finalisée|achevée)'
+        ]
+        
+        for pattern in completion_patterns:
+            if re.search(pattern, solution_lower):
+                return True
+        
+        completion_verbs = ['valider', 'vérifier', 'tester', 'confirmer',
+                           'exécuter', 'appliquer', 'implémenter', 'installer']
+        
+        for token in doc:
+            if token.lemma_ in completion_verbs and token.pos_ == 'VERB':
+                if token.morph.get('Tense') in ['Past', 'Pres']:
+                    return True
+        
+        time_indicators = ['maintenant', 'actuellement', 'désormais', 'à présent']
+        
+        for token in doc:
+            if token.text.lower() in time_indicators:
+                return True
+        
+        return False
+        
+    except Exception as e:
+        print(f"Erreur détection indicateurs complétion: {e}")
+        return False
+
 def calculate_concordance_score(problem, solution):
-    """Calcule le score de concordance entre la description du problème et de la solution."""
+    """
+    Calcule le score de concordance selon les 3 critères:
+    1. Similarité sémantique (20 points)
+    2. Mots-clés de résolution (40 points) - DÉTECTION AUTOMATIQUE
+    3. Indicateurs de complétion (40 points) - DÉTECTION AUTOMATIQUE
+    Total: 100 points convertis en pourcentage
+    """
     if pd.isna(problem) or pd.isna(solution):
         return 0.0
     
+    problem_str = str(problem).strip()
+    solution_str = str(solution).strip()
+    
+    if not problem_str or not solution_str:
+        return 0.0
+    
     try:
-        problem_str = str(problem).lower().strip()
-        solution_str = str(solution).lower().strip()
+        solution_doc = nlp(solution_str) if nlp else None
         
-        if not problem_str or not solution_str:
-            return 0.0
+        similarite_score = 0
+        if st_model and problem_str and solution_str:
+            try:
+                embeddings = st_model.encode([problem_str, solution_str])
+                similarity = cosine_similarity([embeddings[0]], [embeddings[1]])[0][0]
+                
+                if similarity >= 0.65:
+                    similarite_score = 20
+                elif 0.50 <= similarity < 0.65:
+                    similarite_score = 15
+                elif 0.30 <= similarity < 0.50:
+                    similarite_score = 10
+                else:
+                    similarite_score = 5
+            except:
+                similarite_score = 5
         
-        # 1. Similarité textuelle basique
-        matcher = SequenceMatcher(None, problem_str, solution_str)
-        base_similarity = matcher.ratio() * 40
+        resolution_detected = detect_resolution_keywords_automatically(solution_str, solution_doc)
+        resolution_score = 40 if resolution_detected else 0
         
-        # 2. Présence de mots-clés de résolution
-        resolution_keywords = ['résolu', 'corrigé', 'réparé', 'fixé', 'solution', 'résolution', 'complété']
-        resolution_found = any(keyword in solution_str for keyword in resolution_keywords)
-        resolution_score = 20 if resolution_found else 0
+        completion_detected = detect_completion_indicators_automatically(solution_str, solution_doc)
+        completion_score = 40 if completion_detected else 0
         
-        # 3. Longueur relative de la solution (pénalise les solutions trop courtes)
-        problem_words = len(problem_str.split())
-        solution_words = len(solution_str.split())
+        total_points = similarite_score + resolution_score + completion_score
+        pourcentage = (total_points / 100) * 100
         
-        if problem_words > 0 and solution_words > 0:
-            length_ratio = min(1.0, solution_words / problem_words)
-            length_score = length_ratio * 20
-        else:
-            length_score = 0
-        
-        # 4. Indices de structure (étapes, achèvement)
-        structure_score = 10 if any(marker in solution_str for marker in ['premièrement', 'étape']) else 5
-        completion_score = 10 if any(marker in solution_str for marker in ['terminé', 'fini']) else 0
-        
-        total_score = base_similarity + resolution_score + length_score + structure_score + completion_score
-        return min(100, round(total_score, 2))
+        return min(100, round(pourcentage, 2))
         
     except Exception as e:
         print(f"Erreur calcul concordance: {e}")
         return 50.0
 
-def calculate_temporal_score(df):
+def calculate_note_concordance(score_concordance):
+    """Convertit le score de concordance (%) en note sur 10."""
+    return round((score_concordance / 100) * 10, 2)
+
+# --- Nouvelle analyse temporelle ---
+
+def calculate_temporal_note(temps_heures):
     """
-    Calcule le Z-score temporel (mesure l'écart par rapport à la moyenne)
-    et identifie les anomalies temporelles.
+    Calcule la note temporelle sur 10 selon le SLA:
+    ≤ 4h : 10.0
+    4-8h : 5.0
+    8-24h : 3.0
+    >24h : 2.0
     """
-    if df.empty or 'TempsHeures' not in df.columns or df['TempsHeures'].isnull().all():
-        df['TempsMoyenHeures'] = 0.0
-        df['EcartTypeHeures'] = 1.0
-        df['ScoreTemporel'] = 0.0
-        df['AnomalieTemporelle'] = 'Non'
+    if pd.isna(temps_heures):
+        return 0.0
+    
+    if temps_heures <= 4.0:
+        return 10.0
+    elif 4.0 < temps_heures <= 8.0:
+        return 5.0
+    elif 8.0 < temps_heures <= 24.0:
+        return 3.0
+    else:
+        return 2.0
+
+# --- Calcul de la note finale sur 10 ---
+
+def calculate_final_note(row):
+    """
+    Calcule la note finale sur 10 = Note Temporelle (50%) + Note Sémantique (40%) + Note Concordance (10%)
+    """
+    note_temporelle = row.get('NoteTemporelle', 0)
+    note_semantique = row.get('NoteSemantique', 0)
+    note_concordance = row.get('NoteConcordance', 0)
+    
+    note_finale = (note_temporelle * 0.50) + (note_semantique * 0.40) + (note_concordance * 0.10)
+    return round(note_finale, 2)
+
+# --- Calcul de la moyenne employé ---
+
+def calculate_employee_average(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Calcule la moyenne des notes pour chaque employé selon la méthode demandée:
+    1. Regroupement par employé
+    2. Somme des notes pour chaque groupe
+    3. Division par le nombre de tickets
+    
+    Formule: Moyenne Employé = Somme des notes / nombre de tickets
+    """
+    if 'AssigneeEmployeeKey' not in df.columns or 'TicketNote' not in df.columns:
         return df
-        
-    mean_h = df['TempsHeures'].mean()
-    # CORRECTION ICI: Utiliser 'TempsHeures' et non 'TemtsHeures'
-    std_h = df['TempsHeures'].std() 
     
-    std_safe = std_h if std_h > 0 else 1.0e-9 
+    df_copy = df.copy()
     
-    df['TempsMoyenHeures'] = round(mean_h, 2)
-    df['EcartTypeHeures'] = round(std_h if std_h > 0 else 1.0, 2)
+    employee_stats = df_copy.groupby('AssigneeEmployeeKey').agg({
+        'TicketNote': ['sum', 'count']
+    }).reset_index()
     
-    # Calcul du Z-Score
-    df['ScoreTemporel'] = (df['TempsHeures'] - mean_h) / std_safe
+    employee_stats.columns = ['AssigneeEmployeeKey', 'TotalNotes', 'TicketCount']
     
-    # Détection d'anomalie
-    df['AnomalieTemporelle'] = np.where(np.abs(df['ScoreTemporel']) > Z_SCORE_THRESHOLD, 'Oui', 'Non')
+    employee_stats['EmployeeAvgScore'] = employee_stats.apply(
+        lambda row: round(row['TotalNotes'] / row['TicketCount'], 2) if row['TicketCount'] > 0 else 0,
+        axis=1
+    )
     
-    return df
+    df_copy = df_copy.merge(
+        employee_stats[['AssigneeEmployeeKey', 'EmployeeAvgScore']],
+        on='AssigneeEmployeeKey',
+        how='left'
+    )
+    
+    return df_copy
+
+# --- Détermination du statut ---
 
 def determine_final_status(row):
     """Détermine le statut final basé sur les 3 indicateurs d'anomalie."""
     sem_ok = row['ScoreSemantique'] >= SEMAN_THRESHOLD * 100
     conc_ok = row['ScoreConcordance'] >= CONC_THRESHOLD * 100
-    temp_ok = row['AnomalieTemporelle'] == 'Non'
+    temp_ok = row['TempsHeures'] <= SLA_THRESHOLD
     
     if sem_ok and conc_ok and temp_ok:
         return 'OK'
     
     num_anomalies = sum([not sem_ok, not conc_ok, not temp_ok])
     
-    if num_anomalies == 1:
-        if not temp_ok:
-            return 'Anomalie de Temps'
-        elif not conc_ok:
-            return 'Anomalie de Concordance'
-        elif not sem_ok:
-            return 'Anomalie Sémantique'
-    
     if num_anomalies >= 2:
         return 'Multiples Anomalies'
+    elif not temp_ok:
+        return 'Anomalie de Temps'
+    elif not conc_ok:
+        return 'Anomalie de Concordance'
+    elif not sem_ok:
+        return 'Anomalie Sémantique'
     
-    return 'Anomalie Indéterminée' # Cas par défaut, devrait rarement arriver
+    return 'Anomalie Indéterminée'
 
-def calculate_ticket_note(row):
-    """Calcule la Note de Ticket (Base 10) par pénalité selon le Statut."""
-    status = row['Statut']
+# --- Clustering pour problèmes récurrents ---
+
+def extract_keywords_automatically(descriptions: List[str]) -> str:
+    """Extrait automatiquement les mots-clés les plus pertinents d'une liste de descriptions."""
+    if not descriptions:
+        return "Aucun mot-clé"
     
-    if status == 'OK':
-        return 10.0
-    elif status == 'Anomalie de Temps':
-        return 7.0
-    elif status == 'Anomalie Sémantique' or status == 'Anomalie de Concordance':
-        return 8.0
-    elif status == 'Multiples Anomalies':
-        return 5.0
+    try:
+        all_text = ' '.join(descriptions)
+        doc = nlp(all_text.lower())
+        
+        relevant_words = []
+        for token in doc:
+            if (token.pos_ in ['NOUN', 'VERB', 'ADJ'] and 
+                not token.is_stop and 
+                len(token.text) > 3 and
+                token.text.isalpha()):
+                relevant_words.append(token.lemma_)
+        
+        if relevant_words:
+            word_counts = Counter(relevant_words)
+            top_words = [word for word, count in word_counts.most_common(5)]
+            return ', '.join(top_words)
+        
+        return "Aucun mot-clé significatif"
+        
+    except:
+        return "Extraction échouée"
+
+def generate_group_name_from_keywords(keywords: str) -> str:
+    """Génère un nom de groupe basé sur les mots-clés."""
+    if not keywords or keywords == "Aucun mot-clé":
+        return "Problème Divers"
+    
+    first_keyword = keywords.split(',')[0].strip()
+    
+    if len(first_keyword) > 3:
+        return f"Problème de {first_keyword.capitalize()}"
     else:
-        return 6.0 # Anomalie Indéterminée
+        return "Problème Technique"
 
-def generate_anomaly_description(row):
-    """Génère une description détaillée de l'anomalie."""
-    anomalies = []
-    
-    if row['ScoreSemantique'] < SEMAN_THRESHOLD * 100:
-        anomalies.append(f"Description du solution peu claire (Score: {row['ScoreSemantique']:.2f}%)")
-    
-    if row['ScoreConcordance'] < CONC_THRESHOLD * 100:
-        anomalies.append(f"Solution peu pertinente par rapport au problème (Score: {row['ScoreConcordance']:.2f}%)")
-    
-    if row['AnomalieTemporelle'] == 'Oui':
-        anomalies.append(f"Temps de résolution anormal ({row['TempsHeures']:.2f}h / Z-Score: {row['ScoreTemporel']:.2f})")
-    
-    return "; ".join(anomalies) if anomalies else "Aucune anomalie détectée"
-
-
-# --- Fonctions de Clustering et d'Extraction de Mots-clés ---
-
-def extract_cluster_info(descriptions):
+def perform_advanced_clustering(df: pd.DataFrame, categories_data: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Extrait un nom de groupe significatif et des mots-clés pour un cluster.
-    Mise à jour pour les 6 catégories demandées + 'Problème Inconnu'.
+    Effectue le clustering avancé pour les problèmes récurrents.
+    Utilise deux sources:
+    1. Base de connaissance (DimCategory) pour les catégories prédéfinies
+    2. Clustering hiérarchique + extraction de mots-clés pour les nouvelles catégories
     """
-    if not descriptions or not nlp:
-        return "Sans description", "Aucun contenu"
     
-    all_text = " ".join(descriptions)
+    cluster_results = []
+    df_with_clusters = df.copy()
+    df_with_clusters['ClusterID'] = -1
     
-    # 1. Reconnaissance d'Entités Nommées (REN) pour ignorer les noms propres
-    doc = nlp(all_text)
-    entities_to_ignore = set()
-    for ent in doc.ents:
-        if ent.label_ in ['PER', 'ORG', 'LOC', 'GPE', 'PROD', 'EVENT']: 
-            entities_to_ignore.add(ent.text.lower())
-            entities_to_ignore.update(ent.text.lower().split())
+    try:
+        if not categories_data.empty:
+            print(f"Recherche de correspondance avec {len(categories_data)} catégories DimCategory...")
             
-    # 2. Nettoyage et tokenisation standard avec correction maketrans
-    to_replace_punc = string.punctuation.replace('-', '').replace("'", '')
-    replace_with_punc = ' ' * len(to_replace_punc)
-    to_replace_digits = string.digits
-    replace_with_digits = ' ' * len(string.digits)
-    
-    to_replace = to_replace_punc + to_replace_digits
-    replace_with = replace_with_punc + replace_with_digits
-    
-    # Sécurité maketrans
-    if len(to_replace) != len(replace_with):
-        clean_text = re.sub(f'[{re.escape(string.punctuation.replace("-", "").replace("'", "") + string.digits)}]', ' ', all_text.lower())
-    else:
-        translator = str.maketrans(to_replace, replace_with)
-        clean_text = all_text.lower().translate(translator)
-        
-    words = clean_text.split()
-    
-    # 3. STOP WORDS ÉTENDUS (Mots vides + Mots génériques à exclure des KW Match)
-    extended_stop_words = set(list(spacy.lang.fr.stop_words.STOP_WORDS) + [
-        'le', 'la', 'les', 'un', 'une', 'des', 'avec', 'pour', 'qui', 'est', 'être', 'avoir', 'faire',
-        'dans', 'sur', 'sous', 'vers', 'avant', 'après', 'chez', 'entre', 'sans', 'comme', 'comment',
-        # Termes GLPI/Génériques
-        'glpi', 'ticket', 'demande', 'facture', 'code', 'version', 'numéro', 'id', 'lien', 'demander',
-        'bonjour', 'merci', 'suite', 'depuis', 'date', 'jour', 'mois', 'année', 'heure', 'minute',
-        'quelque', 'plusieurs', 'chaque', 'urgent', 'important', 'nécessaire', 
-        'besoin', 'utilisateur', 'personne', 'collaborateur', 
-        'problème', 'erreur', 'incident', 'souci', 'bug', 'panne', 'fixé', 'résolu', 'corrigé', 'réparé', 
-        'falloir', 'pouvoir', 'vouloir', 'devoir', 'savoir', 'impossible', 'bloqué', 'technique', 'général', 'cas', 'via',
-        'mise', 'jour', 'création', 'ajout', 'modification', 'supprimer', 'archive', 'vide', 'archivage',
-        'compte', 'installation', 'connexion', 'gestion', 'ouvrir', 'fonctionne',
-        'base', 'timesheet', 'astral', 'hotel', 'lepic', 'lhotel', 'riviera', 'bouquet', 
-        'mariage', 'bbci', 'licence', 'client', 'service', 'site', 'serveur', 
-        'salle', 'magasin', 'magasins', 'siège', 'sièges', 'hadi', 'san', 'pedro', 'rimco', 'hotix', 'digitalix',
-        'gabon', 'cameroun', 'bernabe', 'senegal', 'dga', 'envoi', 'transfert', 'barres', 'carte', 'cadeau',
-        'stock', 'dos', 'stickers', 
-        'vente', 'flash', 'pegas', 'wingle', 'diesel', 'support', 'dpp','gwmdspd','décembre','dashbord',
-        'navision', 'correction', 'hassan', 'semaine', 'ticket', 'hotel','ouattara', 'rosine','pneu',
-        'power', 'bbc''css', 'CSS' 'css', 'dpos', 'l', 'j''d', 's' 'c', 'm','ç' 'c', 'n',
-        # Les mots-clés techniques sont maintenus pour le SCORING
-    ])
-    
-    # 4. Filtrage des mots significatifs
-    meaningful_words = [
-        word for word in words 
-        if word not in extended_stop_words 
-        and word not in entities_to_ignore 
-        and len(word) >= 3
-        and not word.isdigit()
-    ]
-    
-    # 5. Catégories techniques (Mots-clés enrichis)
-    technical_categories = {
-        'Problème Matériel': ['imprimante', 'écran', 'souris', 'clavier', 'casque', 'téléphone', 'batterie', 'pc', 'portable', 'fixe', 'matériel', 'scanner', 'scan', 'disque', 'dur', 'ram', 'carte', 'graphique', 'cpu', 'ecran', 'projecteur', 'peripherique', 'changement', 'reparation', 'impression', 'ssd', 'mémoire', 'toner', 'cartouche', 'mfp', 'tablette', 'mobile'],
-        'Email et Communication': ['mail', 'email', 'messagerie', 'outlook', 'courriel', 'exchange', 'teams', 'whatsapp', 'téléconférence', 'visio', 'conférence', 'boite', 'archive', 'signature', 'calendrier', 'envoi', 'réception', 'spam', 'quota', 'bloqué', 'délai', 'zoom', 'skype', 'meeting', 'contact', 'groupe'],
-        'Logiciel et Application': ['logiciel', 'application', 'windows', 'office', 'sap', 'programme', 'fiori', 'excel', 'word', 'powerpoint', 'adobe', 'suite', 'applicatif', 'licence', 'version', 'miseajour', 'ciel', 'gestion', 'comptabilité', 'hrm', 'outil', 'base', 'donnée', 'bug', 'plantage', 'navision', 'onedrive', 'sharepoint', 'développement', 'script', 'macro', 'vba', 'acrobat'],
-        'Sécurité et Accès': ['motdepasse', 'authentification', 'login', 'compte', 'accès', 'mdp', 'droits', 'autorisation', 'validation', 'session', 'antivirus', 'firewall', 'vpn', 'sécurité', 'crypto', 'certificat', 'chiffrement', 'mfa', 'double', 'factor', 'verrouillé', 'piratage', 'acces', 'privilège', 'restriction', 'phishing', 'biométrie', 'utilisateur'],
-        'Réseau et Communication': ['wifi', 'connexion', 'réseau', 'internet', 'switch', 'routeur', 'câble', 'fibre', 'box', 'lan', 'wan', 'ip', 'partage', 'dossier', 'fichier', 'ftp', 'impossibilité', 'lent', 'debit', 'coupure', 'infrastructure', 'partagé', 'téléchargement', 'dhcp', 'dns', 'proxy', 'cloud', 'azure', 'aws', 'sauvegarde', 'backup', 'vitesse', 'ralentissement'],
-        'Installation et Déploiement': ['installation', 'déploiement', 'configuration', 'migration', 'transfert', 'miseajour', 'parametrage', 'création', 'nouveau', 'poste', 'initiation', 'remplacement', 'transfert', 'déménagement', 'changement', 'formatage', 'reinitialisation', 'setup', 'image', 'gabarit', 'préparation', 'installer']
-    }
-    
-    group_name = "Problème Inconnu" # La nouvelle catégorie par défaut
-    common_words = []
-    
-    if meaningful_words:
-        word_freq = Counter(meaningful_words)
-        
-        # 5a. Attribution d'une catégorie prédéfinie (Priorité)
-        category_scores = {}
-        for category, keywords in technical_categories.items():
-            # Compte les occurrences des mots-clés techniques
-            score = sum(word_freq.get(keyword, 0) for keyword in keywords)
-            if score > 0:
-                category_scores[category] = score
-        
-        if category_scores:
-            # On prend la catégorie avec le plus grand score
-            group_name = max(category_scores.items(), key=lambda x: x[1])[0]
-            
-        # 5b. Extraction des mots-clés les plus fréquents (pour toutes les catégories)
-        min_occurrences = max(2, len(descriptions) // 10) # Seuil dynamique
-        common_words = [
-            word for word, count in word_freq.most_common(10) 
-            if count >= min_occurrences
-        ]
-
-        # 5c. Filtrage final des mots-clés
-        final_keywords = []
-        group_words = set(group_name.lower().split())
-        final_ignore_words = extended_stop_words.union(group_words)
-        
-        # Filtre les mots-clés pour éviter de donner le nom de la catégorie comme mot-clé principal
-        for word in common_words[:5]:
-            if word not in final_ignore_words:
-                final_keywords.append(word)
+            for idx, category_row in categories_data.iterrows():
+                category_id = category_row['CategoryID']
+                category_name = category_row['CategoryName']
+                category_desc = str(category_row.get('Description', ''))
                 
-        # 5d. Détermination du KeywordMatch final
-        if group_name == "Problème Inconnu":
-            keywords_match = "non définis" # Si Inconnu, les mots-clés ne sont pas pertinents
-        else:
-            keywords_match = ", ".join(final_keywords) if final_keywords else "analyse sémantique"
+                if not category_desc:
+                    continue
+                
+                matching_indices = []
+                for ticket_idx, row in df.iterrows():
+                    problem_desc = str(row.get('ProblemDescription', '')).lower()
+                    solution_desc = str(row.get('SolutionContent', '')).lower()
+                    
+                    if (category_name.lower() in problem_desc or 
+                        category_name.lower() in solution_desc or
+                        category_desc.lower() in problem_desc or 
+                        category_desc.lower() in solution_desc):
+                        matching_indices.append(ticket_idx)
+                
+                if matching_indices:
+                    cluster_id = len(cluster_results)
+                    
+                    df_with_clusters.loc[matching_indices, 'ClusterID'] = cluster_id
+                    
+                    all_descriptions = []
+                    for idx in matching_indices:
+                        if pd.notna(df.loc[idx, 'ProblemDescription']):
+                            all_descriptions.append(str(df.loc[idx, 'ProblemDescription']))
+                        if pd.notna(df.loc[idx, 'SolutionContent']):
+                            all_descriptions.append(str(df.loc[idx, 'SolutionContent']))
+                    
+                    specific_keywords = extract_keywords_automatically(all_descriptions)
+                    
+                    cluster_results.append({
+                        'ProblemNameGroup': category_name,
+                        'ClusterID': cluster_id,
+                        'KeywordMatch': specific_keywords if specific_keywords else category_name,
+                        'RecurrenceCount': len(matching_indices),
+                        'CategoryID': category_id
+                    })
         
-        return group_name, keywords_match
+        remaining_indices = df_with_clusters[df_with_clusters['ClusterID'] == -1].index.tolist()
         
-    return group_name, "non définis"
+        if remaining_indices and len(remaining_indices) > 1 and st_model:
+            print(f"Clustering hiérarchique pour {len(remaining_indices)} tickets restants...")
+            
+            descriptions_to_cluster = []
+            valid_indices = []
+            
+            for idx in remaining_indices:
+                problem_desc = str(df.loc[idx, 'ProblemDescription'])
+                if problem_desc and len(problem_desc.strip()) > 10:
+                    descriptions_to_cluster.append(problem_desc)
+                    valid_indices.append(idx)
+            
+            if len(descriptions_to_cluster) >= 2:
+                embeddings = st_model.encode(descriptions_to_cluster, show_progress_bar=False)
+                n_clusters = min(10, max(2, len(descriptions_to_cluster) // 5))
+                
+                clustering = AgglomerativeClustering(
+                    n_clusters=n_clusters,
+                    metric='cosine',
+                    linkage='average'
+                )
+                
+                cluster_labels = clustering.fit_predict(embeddings)
+                
+                for idx, cluster_label in zip(valid_indices, cluster_labels):
+                    cluster_id = len(cluster_results) + cluster_label
+                    df_with_clusters.loc[idx, 'ClusterID'] = cluster_id
+                    
+                    if cluster_id >= len(cluster_results):
+                        cluster_descriptions = []
+                        cluster_indices = []
+                        
+                        for j, (desc_idx, desc_label) in enumerate(zip(valid_indices, cluster_labels)):
+                            if desc_label == cluster_label:
+                                cluster_descriptions.append(descriptions_to_cluster[j])
+                                cluster_indices.append(desc_idx)
+                        
+                        keywords = extract_keywords_automatically(cluster_descriptions)
+                        group_name = generate_group_name_from_keywords(keywords)
+                        
+                        cluster_results.append({
+                            'ProblemNameGroup': group_name,
+                            'ClusterID': cluster_id,
+                            'KeywordMatch': keywords,
+                            'RecurrenceCount': len(cluster_indices),
+                            'CategoryID': 0
+                        })
+                    else:
+                        cluster_results[cluster_id]['RecurrenceCount'] += 1
+        
+        non_clustered = df_with_clusters[df_with_clusters['ClusterID'] == -1]
+        if not non_clustered.empty:
+            cluster_id = len(cluster_results)
+            df_with_clusters.loc[non_clustered.index, 'ClusterID'] = cluster_id
+            
+            cluster_results.append({
+                'ProblemNameGroup': 'Non Classifié',
+                'ClusterID': cluster_id,
+                'KeywordMatch': 'Description insuffisante',
+                'RecurrenceCount': len(non_clustered),
+                'CategoryID': -1
+            })
+        
+        return pd.DataFrame(cluster_results), df_with_clusters
+        
+    except Exception as e:
+        print(f"Erreur clustering avancé: {e}")
+        df_with_clusters['ClusterID'] = 0
+        return pd.DataFrame([{
+            'ProblemNameGroup': 'Échec de Classification',
+            'ClusterID': 0,
+            'KeywordMatch': 'Erreur technique',
+            'RecurrenceCount': len(df),
+            'CategoryID': -1
+        }]), df_with_clusters
 
-
-# --- Fonction Principale du Pipeline ---
+# --- Fonction principale du pipeline ---
 
 def run_full_analysis(df):
-    """Exécute l'intégralité du pipeline d'analyse IA."""
+    """Exécute l'intégralité du pipeline d'analyse IA avec les nouvelles règles."""
     if df.empty:
+        print("DataFrame vide reçu")
         return pd.DataFrame(), pd.DataFrame()
     
     print(f"Début de l'analyse sur {len(df)} tickets assignés")
     
-    # 1. Initialisation des colonnes de Clustering (Importante si le clustering échoue)
-    df['ClusterID'] = 0 
+    df['ClusterID'] = 0
     
-    # 2. Calculs de Scores
+    print("Calcul des scores sémantiques...")
     df['ScoreSemantique'] = df['SolutionContent'].apply(calculate_semantique_score)
+    df['NoteSemantique'] = df['ScoreSemantique'].apply(calculate_note_semantique)
+    
+    print("Calcul des scores de concordance...")
     df['ScoreConcordance'] = df.apply(
         lambda row: calculate_concordance_score(row['ProblemDescription'], row['SolutionContent']),
         axis=1
     )
-    df = calculate_temporal_score(df.copy()) 
+    df['NoteConcordance'] = df['ScoreConcordance'].apply(calculate_note_concordance)
     
-    # 3. Détermination du Statut, Note et Description
+    print("Calcul des notes temporelles...")
+    df['NoteTemporelle'] = df['TempsHeures'].apply(calculate_temporal_note)
+    
+    print("Calcul des notes finales...")
+    df['TicketNote'] = df.apply(calculate_final_note, axis=1)
+    
+    print("Détermination des statuts...")
     df['Statut'] = df.apply(determine_final_status, axis=1)
-    df['TicketNote'] = df.apply(calculate_ticket_note, axis=1)
     
-    # Calcul de la Moyenne Employé
-    if 'AssigneeEmployeeKey' in df.columns:
-        employee_avg = df.groupby('AssigneeEmployeeKey')['TicketNote'].mean().round(2)
-        df['EmployeeAvgScore'] = df['AssigneeEmployeeKey'].map(employee_avg)
-        df['EmployeeAvgScore'] = df['EmployeeAvgScore'].fillna(df['TicketNote'])
-    else:
-        df['EmployeeAvgScore'] = df['TicketNote']
+    print("Calcul des moyennes employé...")
+    df = calculate_employee_average(df)
     
-    df['AnomalyDescription'] = df.apply(generate_anomaly_description, axis=1)
-    
-    # 4. Clustering (seulement si le modèle est chargé)
-    cluster_results = pd.DataFrame() 
-    
-    if st_model is not None and 'ProblemDescription' in df.columns:
-        try:
-            valid_data = df[df['ProblemDescription'].notna() & (df['ProblemDescription'].str.strip() != '')]
-            valid_indices = valid_data.index.tolist()
-            valid_descriptions = valid_data['ProblemDescription'].tolist()
-
-            if len(valid_descriptions) > 1:
-                print(f"🔧 Début du clustering sur {len(valid_descriptions)} tickets...")
-                embeddings = st_model.encode(valid_descriptions, show_progress_bar=False)
-                
-                base_tickets = len(valid_descriptions)
-                n_clusters = min(60, max(3, base_tickets // 50 + 1)) 
-                
-                # Le ClusterID commence à 0
-                clustering_model = AgglomerativeClustering(n_clusters=n_clusters, metric='cosine', linkage='average')
-                clustering_model.fit(embeddings)
-                
-                cluster_mapping = pd.Series(clustering_model.labels_, index=valid_indices)
-                df.loc[valid_indices, 'ClusterID'] = cluster_mapping.values
-                
-                cluster_data = []
-                for cluster_id in range(n_clusters):
-                    cluster_descriptions = df[df['ClusterID'] == cluster_id]['ProblemDescription'].tolist()
-                    if cluster_descriptions:
-                        group_name, keywords = extract_cluster_info(cluster_descriptions)
-                        cluster_data.append({
-                            'ProblemNameGroup': group_name,
-                            'ClusterID': cluster_id,
-                            'KeywordMatch': keywords,
-                            'RecurrenceCount': len(cluster_descriptions)
-                        })
-                
-                cluster_results = pd.DataFrame(cluster_data)
-                print(f"✅ Clustering terminé: {len(cluster_results)} clusters générés")
-                
-        except Exception as e:
-            print(f"❌ Erreur de Clustering ou de maketrans: {e}")
-            # Si échec, ClusterID reste à 0 pour tous les tickets.
-    
-    # S'assurer que le ClusterID est un entier
-    df['ClusterID'] = df['ClusterID'].fillna(0).astype(int)
-    df_anomalies = df.copy()
-    
-    # 5. Finalisation des résultats de Clustering (SANS GESTION SPÉCIALE DU CLUSTER ID 0)
-    if not cluster_results.empty:
-        # Pas d'incrémentation : le ClusterID 0 correspond au premier cluster
+    print("Clustering avancé en cours...")
+    cluster_results = pd.DataFrame()
+    try:
+        from utils.db_connector import load_categories_data
+        categories_data = load_categories_data()
+        cluster_results, df_with_clusters = perform_advanced_clustering(df, categories_data)
         
-        # Ajout d'une entrée pour les tickets non analysés (ceux restés à ID 0 car description manquante)
-        tickets_restants = len(df_anomalies[df_anomalies['ClusterID'] == 0])
-        if tickets_restants > 0:
-            # S'assurer que le ClusterID 0 correspond bien aux tickets restants ou au premier cluster normal
-            # Si le cluster 0 n'est pas dans les résultats, cela signifie qu'il ne contient que les tickets exclus.
-            if 0 not in cluster_results['ClusterID'].values:
-                 cluster_results.loc[len(cluster_results)] = {
-                    'ProblemNameGroup': 'Ticket Non Analysé (Description Manquante)',
-                    'ClusterID': 0, 
-                    'KeywordMatch': 'Non applicable',
-                    'RecurrenceCount': tickets_restants
-                }
-
-        cluster_results = cluster_results.sort_values(by='ClusterID').reset_index(drop=True)
+        df['ClusterID'] = df_with_clusters['ClusterID']
         
-    else:
-        # Si le clustering a échoué: tout est assigné à l'ID 0
-        df_anomalies['ClusterID'] = 0 
-        cluster_results = pd.DataFrame([{
-            'ProblemNameGroup': 'Échec de Classification IA',
-            'ClusterID': 0,
-            'KeywordMatch': 'Vérifiez les dépendances spacy et sentence-transformers',
-            'RecurrenceCount': len(df)
-        }])
-
-    # 6. Sélection des colonnes pour la table FactAnomaliesDetail
-    df_anomalies = df_anomalies[[
-        'TicketID', 'FactKey', 'AssigneeEmployeeKey', 'AssigneeFullName', 
-        'TicketNote', 'EmployeeAvgScore', 'ScoreSemantique', 'ScoreConcordance',
-        'TempsHeures', 'TempsMoyenHeures', 'EcartTypeHeures', 'ScoreTemporel',
-        'AnomalieTemporelle', 'Statut', 'AnomalyDescription', 
-        'ClusterID' 
+        print(f"Clustering terminé: {len(cluster_results)} clusters créés")
+    except Exception as e:
+        print(f"Erreur clustering: {e}")
+        cluster_results = pd.DataFrame()
+    
+    print("Préparation des résultats...")
+    df_anomalies = df[[
+        'TicketID', 'FactKey', 'AssigneeEmployeeKey', 'AssigneeFullName',
+        'TicketNote', 'EmployeeAvgScore', 
+        'ScoreSemantique', 'NoteSemantique',
+        'ScoreConcordance', 'NoteConcordance',
+        'TempsHeures', 'NoteTemporelle',
+        'Statut', 'ClusterID'
     ]].copy()
     
+    for col in ['TicketNote', 'EmployeeAvgScore', 'NoteSemantique', 'NoteConcordance', 'NoteTemporelle']:
+        if col in df_anomalies.columns:
+            df_anomalies[col] = pd.to_numeric(df_anomalies[col], errors='coerce').fillna(0)
+    
+    print("Analyse terminée avec succès!")
     return df_anomalies, cluster_results
