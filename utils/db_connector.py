@@ -106,31 +106,18 @@ def load_data_for_analysis():
 def delete_old_data(conn):
     """
     Supprime les anciennes données des tables de faits et de dimension.
-    Utilise TRUNCATE pour réinitialiser les identifiants.
     """
     try:
-        # Utiliser TRUNCATE TABLE pour réinitialiser les ID auto-incrémentés
-        conn.execute(text("TRUNCATE TABLE FactAnomaliesDetail"))
-        conn.execute(text("TRUNCATE TABLE DimRecurrentProblems"))
+        # Supprimer d'abord FactAnomaliesDetail (enfant) puis DimRecurrentProblems (parent)
+        conn.execute(text("DELETE FROM FactAnomaliesDetail"))
+        conn.execute(text("DELETE FROM DimRecurrentProblems"))
         
-        print("Tables vidées et identifiants réinitialisés")
+        print("Anciennes données supprimées")
         return True
     except Exception as e:
-        # Si TRUNCATE échoue (à cause des contraintes de clé étrangère), utiliser DELETE
-        try:
-            conn.execute(text("DELETE FROM FactAnomaliesDetail"))
-            conn.execute(text("DELETE FROM DimRecurrentProblems"))
-            
-            # Réinitialiser les séquences d'identifiants
-            conn.execute(text("DBCC CHECKIDENT ('DimRecurrentProblems', RESEED, 0)"))
-            conn.execute(text("DBCC CHECKIDENT ('FactAnomaliesDetail', RESEED, 0)"))
-            
-            print("Anciennes données supprimées et identifiants réinitialisés")
-            return True
-        except Exception as e2:
-            conn.rollback()
-            print(f"Erreur lors de la suppression des données : {e2}")
-            return False
+        print(f"Erreur lors de la suppression des données : {e}")
+        # Continuer même si l'effacement échoue
+        return True
 
 def save_analysis_results(df_anomalies: pd.DataFrame, cluster_results: pd.DataFrame):
     """
@@ -142,71 +129,73 @@ def save_analysis_results(df_anomalies: pd.DataFrame, cluster_results: pd.DataFr
         
     try:
         with engine.connect() as conn:
-            transaction = conn.begin()
             
-            try:
-                if not delete_old_data(conn):
-                    transaction.rollback()
-                    return False
-                    
-                if cluster_results is not None and not cluster_results.empty:
-                    clusters_to_save = cluster_results[[
-                        'ProblemNameGroup', 'ClusterID', 'KeywordMatch', 'RecurrenceCount', 'CategoryID'
-                    ]].copy()
-                    
-                    # Réinitialiser les ClusterID pour éviter les doublons
-                    clusters_to_save['ClusterID'] = range(1, len(clusters_to_save) + 1)
-                    
-                    clusters_to_save['CategoryID'] = clusters_to_save['CategoryID'].replace({np.nan: None})
-                    
-                    clusters_to_save.to_sql(
-                        'DimRecurrentProblems', 
-                        conn, 
-                        if_exists='append', 
-                        index=False
-                    )
-                    print(f"{len(clusters_to_save)} problèmes récurrents sauvegardés dans DimRecurrentProblems")
-                    
-                    # Mettre à jour les ClusterID dans df_anomalies pour correspondre
-                    if not df_anomalies.empty:
-                        # Créer un mapping entre les anciens et nouveaux ClusterID
-                        cluster_mapping = dict(zip(cluster_results['ClusterID'], clusters_to_save['ClusterID']))
-                        df_anomalies['ClusterID'] = df_anomalies['ClusterID'].map(cluster_mapping).fillna(0)
+            # Supprimer les anciennes données
+            delete_old_data(conn)
                 
+            if cluster_results is not None and not cluster_results.empty:
+                # Préparer les données pour DimRecurrentProblems
+                clusters_to_save = cluster_results[[
+                    'ProblemNameGroup', 'ClusterID', 'KeywordMatch', 'RecurrenceCount', 'CategoryID'
+                ]].copy()
+                
+                # S'assurer que ClusterID est unique
+                clusters_to_save['ClusterID'] = range(1, len(clusters_to_save) + 1)
+                
+                clusters_to_save['CategoryID'] = clusters_to_save['CategoryID'].replace({np.nan: None})
+                
+                # Insérer dans DimRecurrentProblems
+                clusters_to_save.to_sql(
+                    'DimRecurrentProblems', 
+                    conn, 
+                    if_exists='append', 
+                    index=False
+                )
+                print(f"{len(clusters_to_save)} problèmes récurrents sauvegardés dans DimRecurrentProblems")
+                
+                # Créer un mapping pour mettre à jour les ClusterID dans df_anomalies
+                cluster_mapping = dict(zip(cluster_results['ClusterID'], clusters_to_save['ClusterID']))
+                
+                # Mettre à jour les ClusterID dans df_anomalies
                 if not df_anomalies.empty:
-                    
-                    anomalies_to_save = df_anomalies[[
-                        'TicketID', 'FactKey', 'AssigneeEmployeeKey', 'AssigneeFullName',
-                        'TicketNote', 'EmployeeAvgScore', 'ScoreSemantique', 'NoteSemantique',
-                        'ScoreConcordance', 'NoteConcordance', 'TempsHeures', 'NoteTemporelle',
-                        'Statut', 'ClusterID'
-                    ]].copy()
-                    
-                    anomalies_to_save = anomalies_to_save.fillna({
-                        'TicketNote': 0, 'EmployeeAvgScore': 0, 
-                        'ScoreSemantique': 0, 'NoteSemantique': 0,
-                        'ScoreConcordance': 0, 'NoteConcordance': 0,
-                        'TempsHeures': 0, 'NoteTemporelle': 0,
-                        'Statut': 'Non Déterminé', 'ClusterID': 0
-                    })
-                    
-                    anomalies_to_save.to_sql(
-                        'FactAnomaliesDetail', 
-                        conn, 
-                        if_exists='append', 
-                        index=False
-                    )
-                    print(f"{len(anomalies_to_save)} anomalies sauvegardées dans FactAnomaliesDetail")
+                    df_anomalies['ClusterID'] = df_anomalies['ClusterID'].map(cluster_mapping).fillna(0)
+            
+            if not df_anomalies.empty:
+                # Préparer les données pour FactAnomaliesDetail
+                anomalies_to_save = df_anomalies[[
+                    'TicketID', 'FactKey', 'AssigneeEmployeeKey', 'AssigneeFullName',
+                    'TicketNote', 'EmployeeAvgScore', 'ScoreSemantique', 'NoteSemantique',
+                    'ScoreConcordance', 'NoteConcordance', 'TempsHeures', 'NoteTemporelle',
+                    'Statut', 'ClusterID'
+                ]].copy()
                 
-                transaction.commit()
-                print("Sauvegarde terminée avec succès")
-                return True
+                # Remplir les valeurs NaN
+                anomalies_to_save = anomalies_to_save.fillna({
+                    'TicketNote': 0, 'EmployeeAvgScore': 0, 
+                    'ScoreSemantique': 0, 'NoteSemantique': 0,
+                    'ScoreConcordance': 0, 'NoteConcordance': 0,
+                    'TempsHeures': 0, 'NoteTemporelle': 0,
+                    'Statut': 'Non Déterminé', 'ClusterID': 0
+                })
                 
-            except Exception as e:
-                transaction.rollback()
-                print(f"Erreur lors de la sauvegarde: {e}")
-                return False
+                # Insérer dans FactAnomaliesDetail
+                anomalies_to_save.to_sql(
+                    'FactAnomaliesDetail', 
+                    conn, 
+                    if_exists='append', 
+                    index=False
+                )
+                print(f"{len(anomalies_to_save)} anomalies sauvegardées dans FactAnomaliesDetail")
+            
+            # Valider la transaction
+            conn.commit()
+            print("Sauvegarde terminée avec succès")
+            return True
             
     except Exception as e:
-        print(f"Erreur de connexion lors de la sauvegarde: {e}")
+        print(f"Erreur lors de la sauvegarde: {e}")
+        try:
+            conn.rollback()
+        except:
+            pass
         return False
