@@ -166,7 +166,7 @@ def save_analysis_results(df_anomalies: pd.DataFrame, cluster_results: pd.DataFr
                     'TicketID', 'FactKey', 'AssigneeEmployeeKey', 'AssigneeFullName',
                     'TicketNote', 'EmployeeAvgScore', 'ScoreSemantique', 'NoteSemantique',
                     'ScoreConcordance', 'NoteConcordance', 'TempsHeures', 'NoteTemporelle',
-                    'Statut', 'ClusterID'
+                    'Statut', 'ClusterID', 'CategoryID'  # Ajout de CategoryID
                 ]].copy()
                 
                 # Remplir les valeurs NaN
@@ -175,7 +175,8 @@ def save_analysis_results(df_anomalies: pd.DataFrame, cluster_results: pd.DataFr
                     'ScoreSemantique': 0, 'NoteSemantique': 0,
                     'ScoreConcordance': 0, 'NoteConcordance': 0,
                     'TempsHeures': 0, 'NoteTemporelle': 0,
-                    'Statut': 'Non Déterminé', 'ClusterID': 0
+                    'Statut': 'Non Déterminé', 'ClusterID': 0,
+                    'CategoryID': 0  # Ajout de CategoryID
                 })
                 
                 # Insérer dans FactAnomaliesDetail
