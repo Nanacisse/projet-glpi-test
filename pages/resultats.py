@@ -136,8 +136,12 @@ def render():
     
     with col1:
         if 'Nom Employé' in df_display_final.columns:
-            employes = ['Tous'] + sorted(df_display_final['Nom Employé'].unique().tolist())
-            employe_filtre = st.selectbox("Nom employé", employes)
+            # Récupérer la liste des employés depuis les données d'origine
+            if 'AssigneeFullName' in df_data.columns:
+                employes_list = ['Tous'] + sorted(df_data['AssigneeFullName'].dropna().unique().tolist())
+                employe_filtre = st.selectbox("Nom employé", employes_list)
+            else:
+                employe_filtre = 'Tous'
         else:
             employe_filtre = 'Tous'
     
@@ -169,19 +173,62 @@ def render():
     # Application des filtres
     df_filtre = df_data.copy()
     
+    # FILTRE EMPLOYÉ - CORRECTION ICI
     if employe_filtre != 'Tous' and 'AssigneeFullName' in df_filtre.columns:
         df_filtre = df_filtre[df_filtre['AssigneeFullName'] == employe_filtre]
     
-    if type_filtre != 'Tous':
+    # FILTRE TYPE D'ANOMALIE - CORRECTION ICI
+    if type_filtre != 'Tous' and 'Statut' in df_filtre.columns:
         df_filtre = df_filtre[df_filtre['Statut'] == type_filtre]
     
+    # FILTRE DATE - CORRECTION ICI
     if date_filtre and 'DateCreation' in df_filtre.columns:
         try:
-            df_filtre = df_filtre[pd.to_datetime(df_filtre['DateCreation']).dt.date == date_filtre]
+            # Convertir en datetime et comparer les dates seulement
+            df_filtre['DateCreation_dt'] = pd.to_datetime(df_filtre['DateCreation'])
+            df_filtre = df_filtre[df_filtre['DateCreation_dt'].dt.date == date_filtre]
         except:
             pass
     
-    df_display_filtre = df_display_final.loc[df_filtre.index] if not df_filtre.empty else df_display_final
+    # Préparer les données pour l'affichage filtré
+    if not df_filtre.empty:
+        # Conserver l'index original pour l'alignement
+        df_display_filtre = df_display_final.loc[df_filtre.index]
+    else:
+        # Si aucun résultat, créer un DataFrame vide avec les mêmes colonnes
+        df_display_filtre = pd.DataFrame(columns=df_display_final.columns)
+
+    # Statistiques - UTILISER df_filtre CORRECTEMENT
+    total_tickets = len(df_filtre)
+    
+    if 'TempsHeures' in df_filtre.columns and not df_filtre.empty:
+        temps_moyen = df_filtre['TempsHeures'].mean()
+        ecart_type = df_filtre['TempsHeures'].std()
+    else:
+        temps_moyen = 0
+        ecart_type = 0
+    
+    # CORRECTION : Afficher les statistiques au bon endroit
+    st.markdown(f"""
+    <div style='display: flex; justify-content: space-between; margin: 20px 0 20px 0; padding: 15px; background-color: #f8f9fa; border-radius: 8px; border: 1px solid #dee2e6;'>
+        <div style='text-align: center; flex: 1;'>
+            <div style='font-size: 14px; font-weight: bold; color: #2e2a80;'>Total Tickets</div>
+            <div style='font-size: 24px; font-weight: bold; color: #333;'>{total_tickets}</div>
+        </div>
+        <div style='text-align: center; flex: 1;'>
+            <div style='font-size: 14px; font-weight: bold; color: #2e2a80;'>Temps Moyen Résolution</div>
+            <div style='font-size: 24px; font-weight: bold; color: #333;'>{temps_moyen:.2f}h</div>
+        </div>
+        <div style='text-align: center; flex: 1;'>
+            <div style='font-size: 14px; font-weight: bold; color: #2e2a80;'>Écart Type</div>
+            <div style='font-size: 24px; font-weight: bold; color: #333;'>{ecart_type:.2f}h</div>
+        </div>
+        <div style='text-align: center; flex: 1;'>
+            <div style='font-size: 14px; font-weight: bold; color: #2e2a80;'>SLA Référence</div>
+            <div style='font-size: 24px; font-weight: bold; color: #333;'>4h</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
     with col4:
         export_col1, export_col2 = st.columns([0.6, 0.4])
@@ -227,37 +274,6 @@ def render():
                     
             except Exception as e:
                 st.error(f"Erreur export {export_format}: {str(e)}")
-
-    # Statistiques simplifiées
-    total_tickets = len(df_filtre)
-    
-    if 'TempsHeures' in df_filtre.columns:
-        temps_moyen = df_filtre['TempsHeures'].mean()
-        ecart_type = df_filtre['TempsHeures'].std()
-    else:
-        temps_moyen = 0
-        ecart_type = 0
-    
-    st.markdown(f"""
-    <div style='display: flex; justify-content: space-between; margin: 10px 0 20px 0; padding: 10px 0; border-bottom: 1px solid #eee;'>
-        <div style='text-align: center; flex: 1;'>
-            <div style='font-size: 14px; font-weight: bold; color: #2e2a80;'>Total Tickets</div>
-            <div style='font-size: 18px; font-weight: bold; color: #333;'>{total_tickets}</div>
-        </div>
-        <div style='text-align: center; flex: 1;'>
-            <div style='font-size: 14px; font-weight: bold; color: #2e2a80;'>Temps Moyen Résolution</div>
-            <div style='font-size: 18px; font-weight: bold; color: #333;'>{temps_moyen:.2f}h</div>
-        </div>
-        <div style='text-align: center; flex: 1;'>
-            <div style='font-size: 14px; font-weight: bold; color: #2e2a80;'>Écart Type</div>
-            <div style='font-size: 18px; font-weight: bold; color: #333;'>{ecart_type:.2f}h</div>
-        </div>
-        <div style='text-align: center; flex: 1;'>
-            <div style='font-size: 14px; font-weight: bold; color: #2e2a80;'>SLA</div>
-            <div style='font-size: 18px; font-weight: bold; color: #333;'>4H</div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
 
     # Affichage du tableau
     if not df_display_filtre.empty:

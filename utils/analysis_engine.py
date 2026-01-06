@@ -41,36 +41,44 @@ nlp = None
 st_model = None
 tool = None
 
-print("Chargement des modèles NLP...")
-try:
-    # Charger spaCy avec désactivation des composants inutiles
-    nlp = spacy.load("fr_core_news_sm", disable=['parser', 'ner', 'textcat'])
+def initialize_nlp_models():
+    """Initialise les modèles NLP de manière différée."""
+    global nlp, st_model, tool
     
-    # Charger SentenceTransformer (modèle plus rapide)
-    st_model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')  # ⭐ PLUS RAPIDE
-    
-    # Initialiser language_tool_python avec timeout
-    try:
-        # Vérifier si Java est disponible
-        result = subprocess.run(['java', '-version'], capture_output=True, text=True, timeout=3)
-        if result.returncode == 0:
-            tool = language_tool_python.LanguageTool('fr')
-            print("✓ Vérification grammaticale activée avec Java")
-        else:
-            print("⚠ Java non disponible - Vérification grammaticale désactivée")
+    if nlp is None:
+        try:
+            print("Chargement des modèles NLP...")
+            # Charger spaCy avec désactivation des composants inutiles
+            nlp = spacy.load("fr_core_news_sm", disable=['parser', 'ner', 'textcat'])
+            
+            # Charger SentenceTransformer (modèle plus rapide)
+            st_model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')  # ⭐ PLUS RAPIDE
+            
+            # Initialiser language_tool_python avec timeout
+            try:
+                # Vérifier si Java est disponible
+                result = subprocess.run(['java', '-version'], capture_output=True, text=True, timeout=3)
+                if result.returncode == 0:
+                    tool = language_tool_python.LanguageTool('fr')
+                    print("✓ Vérification grammaticale activée avec Java")
+                else:
+                    print("⚠ Java non disponible - Vérification grammaticale désactivée")
+                    tool = None
+            except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as java_error:
+                print(f"⚠ Java non détecté, désactivation vérification grammaticale")
+                tool = None
+            
+            print("✓ Modèles NLP chargés avec succès")
+            
+        except Exception as e:
+            print(f"⚠ Erreur chargement modèles: {e}")
+            print("Continuer avec fonctionnalités de base...")
+            nlp = None
+            st_model = None
             tool = None
-    except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as java_error:
-        print(f"⚠ Java non détecté, désactivation vérification grammaticale")
-        tool = None
-    
-    print("✓ Modèles NLP chargés avec succès")
-    
-except Exception as e:
-    print(f"⚠ Erreur chargement modèles: {e}")
-    print("Continuer avec fonctionnalités de base...")
-    nlp = None
-    st_model = None
-    tool = None
+
+# Appel initial
+initialize_nlp_models()
 
 # --- Fonction de vérification grammaticale avec TIMEOUT ---
 def check_grammar_with_timeout(text: str, timeout: int = GRAMMAR_CHECK_TIMEOUT) -> int:
@@ -182,6 +190,10 @@ def calculate_semantique_score(text):
         calculate_semantique_score._cache = {}
     
     try:
+        # Initialiser NLP si nécessaire
+        if nlp is None:
+            initialize_nlp_models()
+        
         # Textes courts → analyse simplifiée
         if len(text_str) < 30:
             score = 50.0
@@ -300,6 +312,10 @@ def calculate_concordance_score(problem, solution):
         calculate_concordance_score._cache = {}
     
     try:
+        # Initialiser NLP si nécessaire
+        if nlp is None:
+            initialize_nlp_models()
+            
         solution_doc = nlp(solution_str) if nlp else None
         
         # 1. Similarité sémantique (20 points)
@@ -685,6 +701,10 @@ def run_full_analysis(df):
     print(f"🚀 DÉMARRAGE ANALYSE SUR {len(df)} TICKETS")
     total_start = time.time()
     step_start = time.time()
+    
+    # Initialiser les modèles NLP si nécessaire
+    if nlp is None or st_model is None:
+        initialize_nlp_models()
     
     # Nettoyer les caches au début
     if hasattr(calculate_semantique_score, '_cache'):
