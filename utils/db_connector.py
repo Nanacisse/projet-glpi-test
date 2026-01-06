@@ -4,6 +4,10 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 from sqlalchemy.exc import DBAPIError
+import warnings
+
+# Supprimer les warnings
+warnings.filterwarnings('ignore')
 
 # --- CONFIGURATION DE LA CONNEXION ---
 SERVER_NAME = 'CIYGSG9030DK\\SQLEXPRESS' 
@@ -25,7 +29,7 @@ def get_db_connection():
 
 # Initialisation du moteur SQLAlchemy une seule fois
 try:
-    engine = create_engine(get_db_connection_url(), connect_args={'autocommit': True})
+    engine = create_engine(get_db_connection_url(), connect_args={'autocommit': True}, pool_pre_ping=True)
     print("Connexion à la base de données établie")
 except Exception as e:
     print(f"Erreur de connexion SQLAlchemy : {e}")
@@ -139,10 +143,27 @@ def save_analysis_results(df_anomalies: pd.DataFrame, cluster_results: pd.DataFr
                     'ProblemNameGroup', 'ClusterID', 'KeywordMatch', 'RecurrenceCount', 'CategoryID'
                 ]].copy()
                 
-                # S'assurer que ClusterID est unique
+                # S'assurer que ClusterID est unique et dans la limite de 100
+                max_clusters = min(100, len(clusters_to_save))
+                clusters_to_save = clusters_to_save.head(max_clusters)
                 clusters_to_save['ClusterID'] = range(1, len(clusters_to_save) + 1)
                 
                 clusters_to_save['CategoryID'] = clusters_to_save['CategoryID'].replace({np.nan: None})
+                
+                # Ajouter le temps moyen par cluster
+                if not df_anomalies.empty:
+                    cluster_times = []
+                    for cluster_id in clusters_to_save['ClusterID']:
+                        cluster_tickets = df_anomalies[df_anomalies['ClusterID'] == cluster_id]
+                        if not cluster_tickets.empty:
+                            avg_time = cluster_tickets['TempsHeures'].mean()
+                        else:
+                            avg_time = 0
+                        cluster_times.append(avg_time)
+                    
+                    clusters_to_save['TempsMoyenHeures'] = cluster_times
+                else:
+                    clusters_to_save['TempsMoyenHeures'] = 0
                 
                 # Insérer dans DimRecurrentProblems
                 clusters_to_save.to_sql(
@@ -154,7 +175,7 @@ def save_analysis_results(df_anomalies: pd.DataFrame, cluster_results: pd.DataFr
                 print(f"{len(clusters_to_save)} problèmes récurrents sauvegardés dans DimRecurrentProblems")
                 
                 # Créer un mapping pour mettre à jour les ClusterID dans df_anomalies
-                cluster_mapping = dict(zip(cluster_results['ClusterID'], clusters_to_save['ClusterID']))
+                cluster_mapping = dict(zip(range(len(clusters_to_save)), clusters_to_save['ClusterID']))
                 
                 # Mettre à jour les ClusterID dans df_anomalies
                 if not df_anomalies.empty:
@@ -166,7 +187,7 @@ def save_analysis_results(df_anomalies: pd.DataFrame, cluster_results: pd.DataFr
                     'TicketID', 'FactKey', 'AssigneeEmployeeKey', 'AssigneeFullName',
                     'TicketNote', 'EmployeeAvgScore', 'ScoreSemantique', 'NoteSemantique',
                     'ScoreConcordance', 'NoteConcordance', 'TempsHeures', 'NoteTemporelle',
-                    'Statut', 'ClusterID', 'CategoryID'  # Ajout de CategoryID
+                    'Statut', 'ClusterID', 'CategoryID'
                 ]].copy()
                 
                 # Remplir les valeurs NaN
@@ -176,8 +197,11 @@ def save_analysis_results(df_anomalies: pd.DataFrame, cluster_results: pd.DataFr
                     'ScoreConcordance': 0, 'NoteConcordance': 0,
                     'TempsHeures': 0, 'NoteTemporelle': 0,
                     'Statut': 'Non Déterminé', 'ClusterID': 0,
-                    'CategoryID': 0  # Ajout de CategoryID
+                    'CategoryID': 0
                 })
+                
+                # S'assurer que les types de données sont corrects
+                anomalies_to_save['TempsHeures'] = pd.to_numeric(anomalies_to_save['TempsHeures'], errors='coerce').fillna(0)
                 
                 # Insérer dans FactAnomaliesDetail
                 anomalies_to_save.to_sql(
@@ -195,6 +219,8 @@ def save_analysis_results(df_anomalies: pd.DataFrame, cluster_results: pd.DataFr
             
     except Exception as e:
         print(f"Erreur lors de la sauvegarde: {e}")
+        import traceback
+        traceback.print_exc()
         try:
             conn.rollback()
         except:
