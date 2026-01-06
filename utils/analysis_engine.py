@@ -12,6 +12,8 @@ from typing import List, Dict, Tuple
 import warnings
 import time
 import subprocess
+import threading
+from queue import Queue
 
 # Supprimer les warnings
 warnings.filterwarnings('ignore')
@@ -23,13 +25,16 @@ SEMAN_THRESHOLD = 0.80  # 80% pour la sémantique
 CONC_THRESHOLD = 0.20   # 20% pour la concordance
 SLA_THRESHOLD = 4.0     # 4 heures pour le SLA
 
-# --- CONSTANTES DE CLUSTERING INTELLIGENTES ---
-MAX_TOTAL_CLUSTERS = 60            # Maximum ABSOLU (jamais dépasser)
-IDEAL_TICKETS_PER_CLUSTER = 55     # Cible: ~55 tickets par cluster (3,500/60 ≈ 58)
-MIN_TICKETS_PER_CLUSTER = 40       # Minimum pour un cluster significatif
-MAX_TICKETS_PER_CLUSTER = 80       # Maximum avant de diviser
-MIN_CLUSTER_SIZE = 3               # Minimum tickets pour créer un cluster
-MAX_CATEGORIES_TO_USE = 25         # Maximum catégories DimCategory à utiliser
+# --- CONSTANTES D'OPTIMISATION ---
+MAX_TOTAL_CLUSTERS = 60            # Maximum ABSOLU
+IDEAL_TICKETS_PER_CLUSTER = 55     # Cible: ~55 tickets par cluster
+MIN_TICKETS_PER_CLUSTER = 40       # Minimum pour cluster significatif
+MAX_TICKETS_PER_CLUSTER = 80       # Maximum avant division
+MIN_CLUSTER_SIZE = 3               # Minimum tickets pour créer cluster
+MAX_CATEGORIES_TO_USE = 25         # Maximum catégories DimCategory
+MAX_TICKETS_FOR_CLUSTERING = 1500  # ⭐ LIMITE pour performance
+GRAMMAR_CHECK_TIMEOUT = 2          # ⭐ Timeout vérification grammaticale
+MAX_TEXT_LENGTH_FOR_GRAMMAR = 500  # ⭐ Limite longueur texte
 
 # Initialisation des ressources
 nlp = None
@@ -38,49 +43,82 @@ tool = None
 
 print("Chargement des modèles NLP...")
 try:
-    nlp = spacy.load("fr_core_news_sm")
-    st_model = SentenceTransformer('paraphrase-multilingual-mpnet-base-v2')
+    # Charger spaCy avec désactivation des composants inutiles
+    nlp = spacy.load("fr_core_news_sm", disable=['parser', 'ner', 'textcat'])
     
-    # Vérifier si Java est disponible pour language_tool
+    # Charger SentenceTransformer (modèle plus rapide)
+    st_model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')  # ⭐ PLUS RAPIDE
+    
+    # Initialiser language_tool_python avec timeout
     try:
-        result = subprocess.run(['java', '-version'], capture_output=True, text=True, timeout=5)
+        # Vérifier si Java est disponible
+        result = subprocess.run(['java', '-version'], capture_output=True, text=True, timeout=3)
         if result.returncode == 0:
-            tool = language_tool_python.LanguageTool('fr', timeout=30)
-            print("✓ Vérification grammaticale activée avec Java")
+            tool = language_tool_python.LanguageTool('fr', timeout=10)
+            print("✓ Vérification grammaticale activée avec Java (optimisée)")
         else:
             print("⚠ Java non disponible - Vérification grammaticale désactivée")
             tool = None
     except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as java_error:
-        print(f"⚠ Java non détecté, désactivation de la vérification grammaticale: {java_error}")
+        print(f"⚠ Java non détecté, désactivation vérification grammaticale")
         tool = None
     
     print("✓ Modèles NLP chargés avec succès")
     
 except Exception as e:
-    print(f"⚠ Erreur de chargement des modèles: {e}")
-    print("Continuer avec les fonctionnalités de base...")
+    print(f"⚠ Erreur chargement modèles: {e}")
+    print("Continuer avec fonctionnalités de base...")
     nlp = None
     st_model = None
     tool = None
 
-# --- Nouvelle analyse sémantique ---
+# --- Fonction de vérification grammaticale avec TIMEOUT ---
+def check_grammar_with_timeout(text: str, timeout: int = GRAMMAR_CHECK_TIMEOUT) -> int:
+    """Vérifie la grammaire avec timeout pour éviter les blocages."""
+    if not tool or not text or len(text.strip()) < 20:
+        return 0
+    
+    # Limiter la longueur du texte pour performance
+    text_to_check = text[:MAX_TEXT_LENGTH_FOR_GRAMMAR]
+    
+    try:
+        result_queue = Queue()
+        
+        def grammar_check():
+            try:
+                matches = tool.check(text_to_check)
+                result_queue.put(len(matches))
+            except Exception:
+                result_queue.put(0)
+        
+        # Lancer dans un thread séparé
+        check_thread = threading.Thread(target=grammar_check)
+        check_thread.daemon = True
+        check_thread.start()
+        
+        # Attendre avec timeout
+        check_thread.join(timeout=timeout)
+        
+        if check_thread.is_alive():
+            # Timeout - retourner 0 fautes
+            return 0
+        else:
+            # Récupérer le résultat
+            return result_queue.get() if not result_queue.empty() else 0
+            
+    except Exception:
+        return 0
+
+# --- Nouvelle analyse sémantique OPTIMISÉE ---
 
 def detect_vague_words_automatically(text: str, doc) -> List[str]:
-    """
-    Détecte automatiquement les mots vagues dans un texte.
-    Utilise la grammaire et le contexte pour identifier les mots vagues.
-    """
+    """Détecte automatiquement les mots vagues dans un texte."""
     vague_words = []
     
     try:
         modal_verbs = ['pouvoir', 'devoir', 'falloir', 'vouloir', 'sembler']
-        
-        uncertainty_adverbs = ['peut-être', 'probablement', 'éventuellement', 
-                              'possiblement', 'apparemment', 'normalement',
-                              'habituellement', 'généralement', 'souvent']
-        
-        generic_verbs = ['faire', 'mettre', 'prendre', 'voir', 'dire', 
-                        'donner', 'rendre', 'laisser', 'passer']
+        uncertainty_adverbs = ['peut-être', 'probablement', 'éventuellement', 'possiblement']
+        generic_verbs = ['faire', 'mettre', 'prendre', 'voir', 'dire']
         
         for token in doc:
             if token.lemma_ in modal_verbs and len(list(token.children)) < 2:
@@ -91,25 +129,20 @@ def detect_vague_words_automatically(text: str, doc) -> List[str]:
                   not any(child.dep_ == 'obj' for child in token.children)):
                 vague_words.append(token.text)
         
+        # Détection phrases génériques
         sentences = list(doc.sents)
         for sent in sentences:
             words = [token.text.lower() for token in sent if token.is_alpha]
-            unique_words = set(words)
-            
-            if len(words) < 8 and len(unique_words) < 6:
+            if len(words) < 8 and len(set(words)) < 6:
                 vague_words.append("phrase_generique")
         
         return list(set(vague_words))
         
-    except Exception as e:
-        print(f"Erreur détection mots vagues: {e}")
+    except Exception:
         return []
 
 def detect_structural_elements_automatically(doc) -> int:
-    """
-    Détecte automatiquement les éléments de structure dans un texte.
-    Retourne le nombre d'étapes identifiées.
-    """
+    """Détecte automatiquement les éléments de structure dans un texte."""
     try:
         etapes_count = 0
         sentences = list(doc.sents)
@@ -117,61 +150,53 @@ def detect_structural_elements_automatically(doc) -> int:
         if not sentences:
             return 0
         
-        numerical_markers = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10',
-                            'premier', 'deuxième', 'troisième', 'quatrième',
-                            'premièrement', 'deuxièmement', 'troisièmement']
-        
-        temporal_markers = ['ensuite', 'puis', 'après', 'alors', 'maintenant',
-                           'finalement', 'enfin', 'ensuite']
-        
-        logical_markers = ['d\'abord', 'première étape', 'deuxième étape',
-                          'étape suivante', 'dernière étape', 'étape finale']
-        
-        conditional_patterns = [r'si .* alors', r'lorsque .* donc',
-                               r'après avoir .* ensuite']
+        markers = ['premier', 'deuxième', 'troisième', 'ensuite', 'puis', 
+                  'après', 'finalement', 'enfin', 'd\'abord']
         
         for sent in sentences:
             sent_text = sent.text.lower()
-            
-            for marker in numerical_markers + temporal_markers + logical_markers:
-                if marker in sent_text:
-                    etapes_count += 1
-                    break
-            
-            for pattern in conditional_patterns:
-                if re.search(pattern, sent_text):
-                    etapes_count += 1
-                    break
+            if any(marker in sent_text for marker in markers):
+                etapes_count += 1
         
         return min(4, etapes_count)
         
-    except Exception as e:
-        print(f"Erreur détection structure: {e}")
+    except Exception:
         return 0
 
 def calculate_semantique_score(text):
-    """
-    Calcule le score sémantique selon les 4 critères:
-    1. Longueur des phrases (30 points)
-    2. Structure logique (20 points) - DÉTECTION AUTOMATIQUE
-    3. Qualité grammaticale (30 points)
-    4. Détection des mots vagues (20 points) - DÉTECTION AUTOMATIQUE
-    Total: 100 points convertis en pourcentage
-    """
+    """Calcule le score sémantique OPTIMISÉ."""
     if pd.isna(text) or not isinstance(text, str):
-        return 0.0
+        return 50.0
     
     text_str = str(text).strip()
-    if not text_str:
-        return 0.0
+    if not text_str or len(text_str) < 10:
+        return 50.0
+    
+    # ⭐ CACHE pour éviter les recalculs
+    if hasattr(calculate_semantique_score, '_cache'):
+        cache = calculate_semantique_score._cache
+        text_hash = hash(text_str)
+        if text_hash in cache:
+            return cache[text_hash]
+    else:
+        calculate_semantique_score._cache = {}
     
     try:
+        # Textes courts → analyse simplifiée
+        if len(text_str) < 30:
+            score = 50.0
+            calculate_semantique_score._cache[hash(text_str)] = score
+            return score
+        
         doc = nlp(text_str)
         sentences = list(doc.sents)
         
         if not sentences:
-            return 0.0
+            score = 50.0
+            calculate_semantique_score._cache[hash(text_str)] = score
+            return score
         
+        # 1. Longueur des phrases (30 points)
         longueur_score = 30
         for sent in sentences:
             word_count = len([token for token in sent if not token.is_punct])
@@ -179,176 +204,146 @@ def calculate_semantique_score(text):
                 longueur_score -= 5
                 break
         
+        # 2. Structure logique (20 points)
         etapes_trouvees = detect_structural_elements_automatically(doc)
-        structure_score = etapes_trouvees * 5
-        structure_score = min(20, structure_score)
+        structure_score = min(20, etapes_trouvees * 5)
         
+        # 3. Qualité grammaticale (30 points) - OPTIMISÉ avec timeout
         grammaire_score = 30
         if tool:
-            try:
-                matches = tool.check(text_str)
-                nb_fautes = len(matches)
-                nb_mots = len([token for token in doc if token.is_alpha])
-                if nb_mots > 0:
-                    taux_fautes = nb_fautes / nb_mots
-                    grammaire_score = 30 * (1 - min(taux_fautes, 1))
-            except Exception as e:
-                print(f"⚠ Vérification grammaticale échouée: {e}")
-                grammaire_score = 25
+            nb_fautes = check_grammar_with_timeout(text_str, GRAMMAR_CHECK_TIMEOUT)
+            nb_mots = len([token for token in doc if token.is_alpha])
+            if nb_mots > 0:
+                taux_fautes = nb_fautes / nb_mots
+                grammaire_score = 30 * (1 - min(taux_fautes, 1))
         else:
             grammaire_score = 25
         
-        mots_vagues_trouves = detect_vague_words_automatically(text_str, doc)
-        vague_score = 20 - (len(mots_vagues_trouves) * 4)
-        vague_score = max(0, vague_score)
+        # 4. Mots vagues (20 points)
+        mots_vagues = detect_vague_words_automatically(text_str, doc)
+        vague_score = max(0, 20 - (len(mots_vagues) * 4))
         
         total_points = longueur_score + structure_score + grammaire_score + vague_score
-        pourcentage = (total_points / 100) * 100
+        score = min(100, round(total_points, 2))
         
-        return min(100, round(pourcentage, 2))
+        # Mettre en cache
+        calculate_semantique_score._cache[hash(text_str)] = score
+        return score
         
-    except Exception as e:
-        print(f"Erreur analyse sémantique: {e}")
-        return 50.0
+    except Exception:
+        score = 50.0
+        calculate_semantique_score._cache[hash(text_str)] = score
+        return score
 
 def calculate_note_semantique(score_semantique):
     """Convertit le score sémantique (%) en note sur 10."""
     return round((score_semantique / 100) * 10, 2)
 
-# --- Nouvelle analyse de concordance ---
+# --- Nouvelle analyse de concordance OPTIMISÉE ---
 
 def detect_resolution_keywords_automatically(solution_text: str, doc) -> bool:
-    """
-    Détecte automatiquement si la solution contient des mots-clés de résolution.
-    Retourne True si au moins un mot-clé de résolution est détecté.
-    """
+    """Détecte automatiquement les mots-clés de résolution."""
     try:
         solution_lower = solution_text.lower()
         
-        resolution_patterns = [
-            r'problème (?:est|a été) (?:résolu|corrigé|réparé|fixé)',
-            r'(?:j\'ai|nous avons) (?:résolu|corrigé|réparé)',
-            r'solution (?:est|a été) (?:trouvée|appliquée|mise en œuvre)',
-            r'ticket (?:est|a été) (?:clôturé|fermé|terminé)',
-            r'incident (?:est|a été) (?:traité|réglé)'
-        ]
-        
-        for pattern in resolution_patterns:
-            if re.search(pattern, solution_lower):
+        # Recherche directe plus rapide que regex
+        resolution_words = ['résolu', 'corrigé', 'réparé', 'fixé', 'terminé', 'clôturé']
+        for word in resolution_words:
+            if word in solution_lower:
                 return True
         
-        resolution_verbs = ['résoudre', 'corriger', 'réparer', 'fixer',
-                           'terminer', 'clôturer', 'traiter', 'régler']
-        
-        for token in doc:
-            if token.lemma_ in resolution_verbs and token.pos_ == 'VERB':
-                children = list(token.children)
-                if not any(child.dep_ == 'neg' for child in children):
+        # Vérification avec spaCy si disponible
+        if doc:
+            resolution_verbs = ['résoudre', 'corriger', 'réparer', 'fixer']
+            for token in doc:
+                if token.lemma_ in resolution_verbs and token.pos_ == 'VERB':
                     return True
-        
-        resolution_nouns = ['solution', 'résolution', 'correction', 'réparation']
-        
-        for token in doc:
-            if token.lemma_ in resolution_nouns and token.pos_ == 'NOUN':
-                return True
         
         return False
         
-    except Exception as e:
-        print(f"Erreur détection mots-clés résolution: {e}")
+    except Exception:
         return False
 
 def detect_completion_indicators_automatically(solution_text: str, doc) -> bool:
-    """
-    Détecte automatiquement si la solution contient des indicateurs de complétion.
-    Retourne True si au moins un indicateur est détecté.
-    """
+    """Détecte automatiquement les indicateurs de complétion."""
     try:
         solution_lower = solution_text.lower()
         
-        completion_patterns = [
-            r'(?:a été|est) (?:validé|vérifié|testé|confirmé)',
-            r'(?:j\'ai|nous avons) (?:vérifié|testé|validé)',
-            r'(?:fonctionne|opérationnel|en marche) (?:correctement|normalement)',
-            r'(?:mise en œuvre|implémentation) (?:terminée|achevée|complète)',
-            r'(?:installation|configuration) (?:finalisée|achevée)'
-        ]
-        
-        for pattern in completion_patterns:
-            if re.search(pattern, solution_lower):
-                return True
-        
-        completion_verbs = ['valider', 'vérifier', 'tester', 'confirmer',
-                           'exécuter', 'appliquer', 'implémenter', 'installer']
-        
-        for token in doc:
-            if token.lemma_ in completion_verbs and token.pos_ == 'VERB':
-                if token.morph.get('Tense') in ['Past', 'Pres']:
-                    return True
-        
-        time_indicators = ['maintenant', 'actuellement', 'désormais', 'à présent']
-        
-        for token in doc:
-            if token.text.lower() in time_indicators:
+        completion_words = ['validé', 'vérifié', 'testé', 'confirmé', 'fonctionne']
+        for word in completion_words:
+            if word in solution_lower:
                 return True
         
         return False
         
-    except Exception as e:
-        print(f"Erreur détection indicateurs complétion: {e}")
+    except Exception:
         return False
 
 def calculate_concordance_score(problem, solution):
-    """
-    Calcule le score de concordance selon les 3 critères:
-    1. Similarité sémantique (20 points)
-    2. Mots-clés de résolution (40 points) - DÉTECTION AUTOMATIQUE
-    3. Indicateurs de complétion (40 points) - DÉTECTION AUTOMATIQUE
-    Total: 100 points convertis en pourcentage
-    """
+    """Calcule le score de concordance OPTIMISÉ."""
     if pd.isna(problem) or pd.isna(solution):
-        return 0.0
+        return 50.0
     
     problem_str = str(problem).strip()
     solution_str = str(solution).strip()
     
     if not problem_str or not solution_str:
-        return 0.0
+        return 50.0
+    
+    # ⭐ CACHE
+    cache_key = f"{hash(problem_str[:100])}_{hash(solution_str[:100])}"
+    if hasattr(calculate_concordance_score, '_cache'):
+        cache = calculate_concordance_score._cache
+        if cache_key in cache:
+            return cache[cache_key]
+    else:
+        calculate_concordance_score._cache = {}
     
     try:
         solution_doc = nlp(solution_str) if nlp else None
         
-        similarite_score = 0
+        # 1. Similarité sémantique (20 points)
+        similarite_score = 5  # Valeur de base
+        
         if st_model and problem_str and solution_str:
             try:
-                embeddings = st_model.encode([problem_str, solution_str])
+                # Limiter la longueur pour performance
+                prob_short = problem_str[:200]
+                sol_short = solution_str[:200]
+                
+                embeddings = st_model.encode([prob_short, sol_short], 
+                                           show_progress_bar=False,
+                                           batch_size=2)
                 similarity = cosine_similarity([embeddings[0]], [embeddings[1]])[0][0]
                 
                 if similarity >= 0.65:
                     similarite_score = 20
-                elif 0.50 <= similarity < 0.65:
+                elif similarity >= 0.50:
                     similarite_score = 15
-                elif 0.30 <= similarity < 0.50:
+                elif similarity >= 0.30:
                     similarite_score = 10
-                else:
-                    similarite_score = 5
             except:
                 similarite_score = 5
         
+        # 2. Mots-clés de résolution (40 points)
         resolution_detected = detect_resolution_keywords_automatically(solution_str, solution_doc)
         resolution_score = 40 if resolution_detected else 0
         
+        # 3. Indicateurs de complétion (40 points)
         completion_detected = detect_completion_indicators_automatically(solution_str, solution_doc)
         completion_score = 40 if completion_detected else 0
         
-        total_points = similarite_score + resolution_score + completion_score
-        pourcentage = (total_points / 100) * 100
+        total = similarite_score + resolution_score + completion_score
+        score = min(100, round(total, 2))
         
-        return min(100, round(pourcentage, 2))
+        # Mettre en cache
+        calculate_concordance_score._cache[cache_key] = score
+        return score
         
-    except Exception as e:
-        print(f"Erreur calcul concordance: {e}")
-        return 50.0
+    except Exception:
+        score = 50.0
+        calculate_concordance_score._cache[cache_key] = score
+        return score
 
 def calculate_note_concordance(score_concordance):
     """Convertit le score de concordance (%) en note sur 10."""
@@ -357,21 +352,15 @@ def calculate_note_concordance(score_concordance):
 # --- Nouvelle analyse temporelle ---
 
 def calculate_temporal_note(temps_heures):
-    """
-    Calcule la note temporelle sur 10 selon le SLA:
-    ≤ 4h : 10.0
-    4-8h : 5.0
-    8-24h : 3.0
-    >24h : 2.0
-    """
+    """Calcule la note temporelle sur 10 selon le SLA."""
     if pd.isna(temps_heures):
         return 0.0
     
     if temps_heures <= 4.0:
         return 10.0
-    elif 4.0 < temps_heures <= 8.0:
+    elif temps_heures <= 8.0:
         return 5.0
-    elif 8.0 < temps_heures <= 24.0:
+    elif temps_heures <= 24.0:
         return 3.0
     else:
         return 2.0
@@ -379,9 +368,7 @@ def calculate_temporal_note(temps_heures):
 # --- Calcul de la note finale sur 10 ---
 
 def calculate_final_note(row):
-    """
-    Calcule la note finale sur 10 = Note Temporelle (50%) + Note Sémantique (40%) + Note Concordance (10%)
-    """
+    """Calcule la note finale sur 10."""
     note_temporelle = row.get('NoteTemporelle', 0)
     note_semantique = row.get('NoteSemantique', 0)
     note_concordance = row.get('NoteConcordance', 0)
@@ -392,14 +379,7 @@ def calculate_final_note(row):
 # --- Calcul de la moyenne employé ---
 
 def calculate_employee_average(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Calcule la moyenne des notes pour chaque employé selon la méthode demandée:
-    1. Regroupement par employé
-    2. Somme des notes pour chaque groupe
-    3. Division par le nombre de tickets
-    
-    Formule: Moyenne Employé = Somme des notes / nombre de tickets
-    """
+    """Calcule la moyenne des notes pour chaque employé."""
     if 'AssigneeEmployeeKey' not in df.columns or 'TicketNote' not in df.columns:
         return df
     
@@ -448,28 +428,27 @@ def determine_final_status(row):
     
     return 'Anomalie Indéterminée'
 
-# --- Clustering pour problèmes récurrents ---
+# --- Clustering pour problèmes récurrents OPTIMISÉ ---
 
 def extract_keywords_automatically(descriptions: List[str]) -> str:
-    """Extrait automatiquement les mots-clés les plus pertinents d'une liste de descriptions."""
+    """Extrait automatiquement les mots-clés les plus pertinents."""
     if not descriptions:
         return "Aucun mot-clé"
     
     try:
-        all_text = ' '.join(descriptions)
+        all_text = ' '.join(descriptions[:20])  # ⭐ Limiter pour performance
         doc = nlp(all_text.lower())
         
         relevant_words = []
         for token in doc:
-            if (token.pos_ in ['NOUN', 'VERB', 'ADJ'] and 
+            if (token.pos_ in ['NOUN', 'VERB'] and 
                 not token.is_stop and 
-                len(token.text) > 3 and
-                token.text.isalpha()):
+                len(token.text) > 3):
                 relevant_words.append(token.lemma_)
         
         if relevant_words:
             word_counts = Counter(relevant_words)
-            top_words = [word for word, count in word_counts.most_common(5)]
+            top_words = [word for word, _ in word_counts.most_common(3)]
             return ', '.join(top_words)
         
         return "Aucun mot-clé significatif"
@@ -483,16 +462,13 @@ def generate_group_name_from_keywords(keywords: str) -> str:
         return "Problème Divers"
     
     first_keyword = keywords.split(',')[0].strip()
-    
-    if len(first_keyword) > 3:
-        return f"Problème de {first_keyword.capitalize()}"
-    else:
-        return "Problème Technique"
+    return f"Problème: {first_keyword.capitalize()}"
 
 def perform_advanced_clustering(df: pd.DataFrame, categories_data: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    Effectue le clustering avancé pour les problèmes récurrents avec maximum 60 clusters RÉELS.
-    """
+    """Effectue le clustering avancé OPTIMISÉ."""
+    
+    print("🎯 Début clustering optimisé...")
+    start_time = time.time()
     
     cluster_results = []
     df_with_clusters = df.copy()
@@ -500,376 +476,286 @@ def perform_advanced_clustering(df: pd.DataFrame, categories_data: pd.DataFrame)
     df_with_clusters['CategoryID'] = 0
     
     total_tickets = len(df)
-    print(f"📊 Début clustering sur {total_tickets} tickets")
     
     try:
-        # === ÉTAPE 1: Clusters par catégories DimCategory (UNIQUEMENT si significatifs) ===
+        # === ÉTAPE 1: Correspondance rapide avec catégories ===
         categories_used = 0
-        if not categories_data.empty:
-            print(f"🔍 Recherche correspondance avec {len(categories_data)} catégories DimCategory...")
+        if not categories_data.empty and len(categories_data) > 0:
+            print(f"🔍 Recherche dans {min(len(categories_data), 20)} catégories...")
             
-            # Trier les catégories par pertinence potentielle
-            category_matches = []
-            
-            for idx, category_row in categories_data.iterrows():
-                if categories_used >= MAX_CATEGORIES_TO_USE:
+            # Prendre seulement les premières catégories pour performance
+            for idx, category_row in categories_data.head(20).iterrows():
+                if categories_used >= 15:  # Limite raisonnable
                     break
                     
                 category_id = category_row['CategoryID']
-                category_name = category_row['CategoryName']
-                category_desc = str(category_row.get('Description', ''))
+                category_name = str(category_row['CategoryName']).lower()
                 
-                matching_indices = []
-                for ticket_idx, row in df.iterrows():
-                    problem_desc = str(row.get('ProblemDescription', '')).lower()
-                    solution_desc = str(row.get('SolutionContent', '')).lower()
-                    
-                    # Recherche dans problème ET solution
-                    if (category_name.lower() in problem_desc or 
-                        category_name.lower() in solution_desc or
-                        (category_desc and category_desc.lower() in problem_desc) or
-                        (category_desc and category_desc.lower() in solution_desc)):
-                        matching_indices.append(ticket_idx)
+                if not category_name or len(category_name) < 3:
+                    continue
                 
-                if matching_indices:
-                    category_matches.append({
-                        'category_id': category_id,
-                        'category_name': category_name,
-                        'indices': matching_indices,
-                        'count': len(matching_indices)
-                    })
-            
-            # Trier par nombre de matches (décroissant)
-            category_matches.sort(key=lambda x: x['count'], reverse=True)
-            
-            # Prendre les meilleures catégories (celles avec le plus de tickets)
-            for match in category_matches:
-                if categories_used >= MAX_CATEGORIES_TO_USE:
-                    break
-                    
-                if match['count'] >= MIN_CLUSTER_SIZE:  # Au moins 3 tickets
+                # Recherche rapide avec str.contains
+                mask = (df['ProblemDescription'].astype(str).str.lower().str.contains(category_name, na=False) |
+                       df['SolutionContent'].astype(str).str.lower().str.contains(category_name, na=False))
+                
+                matching_indices = df[mask].index.tolist()
+                
+                if len(matching_indices) >= MIN_CLUSTER_SIZE:
                     cluster_id = len(cluster_results)
-                    
-                    df_with_clusters.loc[match['indices'], 'ClusterID'] = cluster_id
-                    df_with_clusters.loc[match['indices'], 'CategoryID'] = match['category_id']
-                    
-                    # Extraire les descriptions pour mots-clés
-                    descriptions = []
-                    for idx in match['indices']:
-                        if pd.notna(df.loc[idx, 'ProblemDescription']):
-                            descriptions.append(str(df.loc[idx, 'ProblemDescription']))
-                        if pd.notna(df.loc[idx, 'SolutionContent']):
-                            descriptions.append(str(df.loc[idx, 'SolutionContent']))
-                    
-                    keywords = extract_keywords_automatically(descriptions)
+                    df_with_clusters.loc[matching_indices, 'ClusterID'] = cluster_id
+                    df_with_clusters.loc[matching_indices, 'CategoryID'] = category_id
                     
                     cluster_results.append({
-                        'ProblemNameGroup': match['category_name'],
+                        'ProblemNameGroup': category_row['CategoryName'],
                         'ClusterID': cluster_id,
-                        'KeywordMatch': keywords if keywords else match['category_name'],
-                        'RecurrenceCount': match['count'],
-                        'CategoryID': match['category_id']
+                        'KeywordMatch': category_name,
+                        'RecurrenceCount': len(matching_indices),
+                        'CategoryID': category_id
                     })
                     
                     categories_used += 1
-                    print(f"  ✓ Catégorie '{match['category_name']}': {match['count']} tickets")
+                    print(f"  ✓ {category_row['CategoryName']}: {len(matching_indices)} tickets")
         
-        print(f"✅ {categories_used} clusters catégories créés (min {MIN_CLUSTER_SIZE} tickets)")
+        print(f"✅ {categories_used} clusters catégories")
         
-        # === ÉTAPE 2: Calcul intelligent du nombre de clusters nécessaires ===
+        # === ÉTAPE 2: ÉCHANTILLONNAGE INTELLIGENT ===
         remaining_indices = df_with_clusters[df_with_clusters['ClusterID'] == -1].index.tolist()
-        remaining_tickets = len(remaining_indices)
+        remaining_count = len(remaining_indices)
         
-        print(f"📦 Tickets restants à clusteriser: {remaining_tickets}")
+        print(f"📦 Tickets restants: {remaining_count}")
         
-        if remaining_tickets > 0:
-            # Calcul du nombre optimal de clusters
-            slots_available = MAX_TOTAL_CLUSTERS - len(cluster_results)
+        if remaining_count > MAX_TICKETS_FOR_CLUSTERING:
+            print(f"⚠ Échantillonnage à {MAX_TICKETS_FOR_CLUSTERING} tickets pour performance")
+            # Échantillonnage aléatoire stratifié
+            remaining_indices = np.random.choice(
+                remaining_indices, 
+                size=MAX_TICKETS_FOR_CLUSTERING, 
+                replace=False
+            ).tolist()
+            remaining_count = len(remaining_indices)
+        
+        # === ÉTAPE 3: Clustering hiérarchique sur échantillon ===
+        if remaining_count >= 50 and st_model:  # Minimum 50 tickets
+            print(f"🔗 Clustering sur {remaining_count} tickets...")
             
-            # Calcul basé sur ratio idéal
-            clusters_by_ratio = remaining_tickets // IDEAL_TICKETS_PER_CLUSTER
+            # Préparer descriptions
+            descriptions = []
+            valid_indices = []
             
-            # Ajustement: prendre le minimum entre ratio et slots disponibles
-            clusters_needed = min(clusters_by_ratio, slots_available)
+            for idx in remaining_indices:
+                desc = str(df.loc[idx, 'ProblemDescription'])
+                if desc and len(desc.strip()) > 20:
+                    descriptions.append(desc[:300])  # ⭐ Limiter longueur
+                    valid_indices.append(idx)
             
-            # Minimum de clusters si assez de tickets
-            if remaining_tickets > 100 and clusters_needed < 5:
-                clusters_needed = min(5, slots_available)
-            
-            # Maximum pour éviter les clusters trop petits
-            max_by_min_size = remaining_tickets // MIN_TICKETS_PER_CLUSTER
-            clusters_needed = min(clusters_needed, max_by_min_size)
-            
-            print(f"🎯 Calcul clusters nécessaires:")
-            print(f"   - Par ratio ({IDEAL_TICKETS_PER_CLUSTER} tickets/cluster): {clusters_by_ratio}")
-            print(f"   - Slots disponibles: {slots_available}")
-            print(f"   - Clusters décidés: {clusters_needed}")
-            print(f"   - Ratio final: {remaining_tickets/clusters_needed:.1f} tickets/cluster")
-            
-            # === ÉTAPE 3: Clustering hiérarchique ===
-            if clusters_needed >= 2 and st_model and remaining_tickets >= 10:
-                print(f"🔗 Clustering hiérarchique pour {remaining_tickets} tickets...")
+            if len(descriptions) >= 20:
+                print(f"  📝 Encodage {len(descriptions)} descriptions...")
                 
-                # Limite pratique pour performance
-                MAX_TICKETS_FOR_CLUSTERING = 2500
-                if remaining_tickets > MAX_TICKETS_FOR_CLUSTERING:
-                    print(f"  ⚠ Échantillonnage à {MAX_TICKETS_FOR_CLUSTERING} tickets")
-                    # Prendre un échantillon représentatif
-                    sample_indices = np.random.choice(
-                        remaining_indices, 
-                        size=MAX_TICKETS_FOR_CLUSTERING, 
-                        replace=False
+                try:
+                    # Encodage optimisé
+                    embeddings = st_model.encode(
+                        descriptions,
+                        show_progress_bar=False,
+                        batch_size=32,
+                        convert_to_numpy=True,
+                        normalize_embeddings=True
                     )
-                    remaining_indices = sample_indices.tolist()
-                    remaining_tickets = len(remaining_indices)
-                
-                # Préparer les descriptions
-                descriptions_to_cluster = []
-                valid_indices = []
-                
-                for idx in remaining_indices:
-                    problem_desc = str(df.loc[idx, 'ProblemDescription'])
-                    if problem_desc and len(problem_desc.strip()) > 10:
-                        descriptions_to_cluster.append(problem_desc)
-                        valid_indices.append(idx)
-                
-                if len(descriptions_to_cluster) >= clusters_needed:
-                    print(f"  📝 Encodage de {len(descriptions_to_cluster)} descriptions...")
-                    embeddings = st_model.encode(descriptions_to_cluster, show_progress_bar=False)
                     
-                    print(f"  🎯 Création de {clusters_needed} clusters...")
+                    # Calcul nombre de clusters
+                    slots_available = MAX_TOTAL_CLUSTERS - len(cluster_results)
+                    clusters_needed = min(
+                        slots_available,
+                        len(descriptions) // 40  # ~40 tickets/cluster
+                    )
                     
-                    # Utiliser MiniBatchKMeans pour performance
-                    try:
-                        from sklearn.cluster import MiniBatchKMeans
-                        clustering = MiniBatchKMeans(
-                            n_clusters=clusters_needed,
-                            random_state=42,
-                            batch_size=1000,
-                            n_init=3,
-                            max_iter=100
-                        )
-                        cluster_labels = clustering.fit_predict(embeddings)
-                        print(f"  ✅ MiniBatchKMeans terminé")
-                    except Exception as km_error:
-                        print(f"  ⚠ MiniBatchKMeans échoué, fallback à AgglomerativeClustering")
-                        clustering = AgglomerativeClustering(
-                            n_clusters=clusters_needed,
-                            metric='cosine',
-                            linkage='average'
-                        )
-                        cluster_labels = clustering.fit_predict(embeddings)
-                    
-                    # Organiser les résultats par cluster
-                    cluster_groups = {}
-                    for idx, cluster_label in zip(valid_indices, cluster_labels):
-                        if cluster_label not in cluster_groups:
-                            cluster_groups[cluster_label] = []
-                        cluster_groups[cluster_label].append(idx)
-                    
-                    # Créer les clusters RÉELS (uniquement si assez de tickets)
-                    clusters_created = 0
-                    for cluster_label, indices in cluster_groups.items():
-                        if len(indices) >= MIN_CLUSTER_SIZE:  # Au moins 3 tickets
-                            cluster_id = len(cluster_results)
+                    if clusters_needed >= 2:
+                        print(f"  🎯 Création {clusters_needed} clusters...")
+                        
+                        try:
+                            from sklearn.cluster import MiniBatchKMeans
+                            kmeans = MiniBatchKMeans(
+                                n_clusters=clusters_needed,
+                                random_state=42,
+                                batch_size=256,  # ⭐ Batch plus grand
+                                max_iter=50,     # ⭐ Moins d'itérations
+                                n_init=2         # ⭐ Moins d'initialisations
+                            )
+                            labels = kmeans.fit_predict(embeddings)
+                            print("  ✅ Clustering terminé")
+                        except:
+                            # Fallback à clustering hiérarchique
+                            from sklearn.cluster import AgglomerativeClustering
+                            clustering = AgglomerativeClustering(
+                                n_clusters=clusters_needed,
+                                linkage='ward',
+                                metric='euclidean'
+                            )
+                            labels = clustering.fit_predict(embeddings)
+                        
+                        # Créer clusters
+                        for cluster_num in range(clusters_needed):
+                            cluster_mask = labels == cluster_num
+                            cluster_indices = [valid_indices[i] for i, mask in enumerate(cluster_mask) if mask]
                             
-                            # Vérifier limite absolue
-                            if cluster_id >= MAX_TOTAL_CLUSTERS:
-                                print(f"  ⚠ Limite de {MAX_TOTAL_CLUSTERS} clusters atteinte")
-                                break
-                            
-                            df_with_clusters.loc[indices, 'ClusterID'] = cluster_id
-                            
-                            # Extraire descriptions pour nom et mots-clés
-                            cluster_descriptions = []
-                            for idx in indices:
-                                if pd.notna(df.loc[idx, 'ProblemDescription']):
-                                    cluster_descriptions.append(str(df.loc[idx, 'ProblemDescription']))
-                            
-                            keywords = extract_keywords_automatically(cluster_descriptions)
-                            group_name = generate_group_name_from_keywords(keywords)
-                            
-                            # Vérifier association avec catégorie existante
-                            cluster_category_id = 0
-                            if categories_data is not None:
-                                cluster_text = ' '.join(cluster_descriptions).lower()
-                                for _, cat_row in categories_data.iterrows():
-                                    cat_name = str(cat_row['CategoryName']).lower()
-                                    if cat_name in cluster_text:
-                                        cluster_category_id = cat_row['CategoryID']
-                                        group_name = f"{cat_row['CategoryName']} ({group_name})"
-                                        break
-                            
-                            cluster_results.append({
-                                'ProblemNameGroup': group_name,
-                                'ClusterID': cluster_id,
-                                'KeywordMatch': keywords,
-                                'RecurrenceCount': len(indices),
-                                'CategoryID': cluster_category_id
-                            })
-                            
-                            df_with_clusters.loc[indices, 'CategoryID'] = cluster_category_id
-                            clusters_created += 1
-                    
-                    print(f"  ✅ {clusters_created} clusters hiérarchiques créés")
-                else:
-                    print(f"  ⚠ Pas assez de descriptions valides pour clustering")
+                            if cluster_indices and len(cluster_indices) >= MIN_CLUSTER_SIZE:
+                                cluster_id = len(cluster_results)
+                                
+                                if cluster_id >= MAX_TOTAL_CLUSTERS:
+                                    break
+                                
+                                df_with_clusters.loc[cluster_indices, 'ClusterID'] = cluster_id
+                                
+                                # Nom du cluster
+                                cluster_descriptions = [descriptions[i] for i, mask in enumerate(cluster_mask) if mask]
+                                keywords = extract_keywords_automatically(cluster_descriptions)
+                                group_name = generate_group_name_from_keywords(keywords)
+                                
+                                cluster_results.append({
+                                    'ProblemNameGroup': group_name,
+                                    'ClusterID': cluster_id,
+                                    'KeywordMatch': keywords,
+                                    'RecurrenceCount': len(cluster_indices),
+                                    'CategoryID': 0
+                                })
+                except Exception as e:
+                    print(f"  ⚠ Erreur clustering: {e}")
         
-        # === ÉTAPE 4: Gestion des tickets non clusterisés ===
+        # === ÉTAPE 4: Gestion tickets non clusterisés ===
         non_clustered = df_with_clusters[df_with_clusters['ClusterID'] == -1]
-        if not non_clustered.empty:
-            print(f"📌 {len(non_clustered)} tickets non clusterisés")
-            
-            # Si peu de tickets, les ajouter au cluster le plus proche
-            if len(non_clustered) < 10 and len(cluster_results) > 0:
-                # Trouver le cluster avec le plus de tickets
-                largest_cluster_id = max(cluster_results, key=lambda x: x['RecurrenceCount'])['ClusterID']
-                df_with_clusters.loc[non_clustered.index, 'ClusterID'] = largest_cluster_id
-                print(f"  ➕ Ajoutés au cluster #{largest_cluster_id}")
-            elif len(non_clustered) >= MIN_CLUSTER_SIZE and len(cluster_results) < MAX_TOTAL_CLUSTERS:
-                # Créer un cluster "Divers"
-                cluster_id = len(cluster_results)
-                df_with_clusters.loc[non_clustered.index, 'ClusterID'] = cluster_id
-                
-                cluster_results.append({
-                    'ProblemNameGroup': 'Problèmes Divers',
-                    'ClusterID': cluster_id,
-                    'KeywordMatch': 'Non classifié',
-                    'RecurrenceCount': len(non_clustered),
-                    'CategoryID': -1
-                })
-                print(f"  ✅ Cluster 'Divers' créé avec {len(non_clustered)} tickets")
-            else:
-                # Distribuer parmi les clusters existants
-                for idx in non_clustered.index:
-                    # Trouver le cluster avec le moins de tickets
-                    if cluster_results:
-                        smallest_cluster = min(cluster_results, key=lambda x: x['RecurrenceCount'])
-                        df_with_clusters.loc[idx, 'ClusterID'] = smallest_cluster['ClusterID']
-                        smallest_cluster['RecurrenceCount'] += 1
+        if not non_clustered.empty and cluster_results:
+            # Ajouter au plus grand cluster
+            if cluster_results:
+                largest_cluster = max(cluster_results, key=lambda x: x['RecurrenceCount'])
+                df_with_clusters.loc[non_clustered.index, 'ClusterID'] = largest_cluster['ClusterID']
+                largest_cluster['RecurrenceCount'] += len(non_clustered)
         
         # === ÉTAPE 5: Finalisation ===
         # Convertir en DataFrame
-        cluster_results_df = pd.DataFrame(cluster_results)
+        cluster_df = pd.DataFrame(cluster_results) if cluster_results else pd.DataFrame()
         
-        if not cluster_results_df.empty:
-            # Trier par nombre d'occurrences
-            cluster_results_df = cluster_results_df.sort_values('RecurrenceCount', ascending=False)
+        if not cluster_df.empty:
+            # Trier et réindexer
+            cluster_df = cluster_df.sort_values('RecurrenceCount', ascending=False)
+            cluster_df = cluster_df.reset_index(drop=True)
+            cluster_df['ClusterID'] = range(len(cluster_df))
             
-            # Réassigner les IDs de 0 à N-1
-            cluster_results_df = cluster_results_df.reset_index(drop=True)
-            cluster_results_df['ClusterID'] = range(len(cluster_results_df))
-            
-            # Mettre à jour les IDs dans df_with_clusters
-            id_mapping = {}
-            for new_id, row in cluster_results_df.iterrows():
-                old_id = row['ClusterID']
-                id_mapping[old_id] = new_id
-            
-            df_with_clusters['ClusterID'] = df_with_clusters['ClusterID'].map(id_mapping)
+            # Mettre à jour les IDs
+            id_mapping = {old_id: new_id for new_id, old_id in enumerate(cluster_df['ClusterID'])}
+            df_with_clusters['ClusterID'] = df_with_clusters['ClusterID'].map(id_mapping).fillna(0).astype(int)
         
-        # Statistiques finales
+        # Statistiques
+        clustered_time = time.time() - start_time
+        final_count = len(cluster_df)
         clustered_tickets = len(df_with_clusters[df_with_clusters['ClusterID'] != -1])
-        final_cluster_count = len(cluster_results_df)
         
-        print(f"\n📊 RÉSULTATS FINAUX DU CLUSTERING:")
-        print(f"   ✅ Clusters totaux: {final_cluster_count}")
-        print(f"   ✅ Tickets clusterisés: {clustered_tickets}/{total_tickets} ({clustered_tickets/total_tickets*100:.1f}%)")
-        print(f"   ✅ Ratio moyen: {clustered_tickets/max(1, final_cluster_count):.1f} tickets/cluster")
+        print(f"\n📊 RÉSULTATS CLUSTERING:")
+        print(f"   ✅ Clusters créés: {final_count}")
+        print(f"   ✅ Tickets clusterisés: {clustered_tickets}/{total_tickets}")
+        print(f"   ✅ Temps: {clustered_time:.1f}s")
         
-        if final_cluster_count > 0:
-            avg_size = cluster_results_df['RecurrenceCount'].mean()
-            min_size = cluster_results_df['RecurrenceCount'].min()
-            max_size = cluster_results_df['RecurrenceCount'].max()
-            print(f"   📈 Taille clusters: min={min_size}, max={max_size}, avg={avg_size:.1f}")
+        if final_count > 0:
+            avg_size = cluster_df['RecurrenceCount'].mean()
+            print(f"   📈 Taille moyenne: {avg_size:.1f} tickets/cluster")
         
-        # Vérifier limite
-        if final_cluster_count > MAX_TOTAL_CLUSTERS:
-            print(f"⚠ ATTENTION: {final_cluster_count} clusters > limite {MAX_TOTAL_CLUSTERS}")
-            print(f"   Troncature à {MAX_TOTAL_CLUSTERS} clusters...")
-            cluster_results_df = cluster_results_df.head(MAX_TOTAL_CLUSTERS)
-        
-        print(f"🎯 OBJECTIF ATTEINT: {len(cluster_results_df)} clusters (max {MAX_TOTAL_CLUSTERS})")
-        
-        return cluster_results_df, df_with_clusters
+        return cluster_df, df_with_clusters
         
     except Exception as e:
-        print(f"❌ Erreur clustering avancé: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"❌ Erreur clustering: {str(e)[:100]}")
         
-        # Solution de repli: un seul cluster
+        # Solution de repli
         df_with_clusters['ClusterID'] = 0
         df_with_clusters['CategoryID'] = 0
         
-        default_cluster = pd.DataFrame([{
-            'ProblemNameGroup': 'Tous les Problèmes',
+        return pd.DataFrame([{
+            'ProblemNameGroup': 'Tous les tickets',
             'ClusterID': 0,
-            'KeywordMatch': 'Erreur de clustering',
+            'KeywordMatch': 'Clustering échoué',
             'RecurrenceCount': len(df),
             'CategoryID': 0
-        }])
-        
-        return default_cluster, df_with_clusters
+        }]), df_with_clusters
 
-# --- Fonction principale du pipeline ---
+# --- Fonction principale OPTIMISÉE ---
 
 def run_full_analysis(df):
-    """Exécute l'intégralité du pipeline d'analyse IA avec optimisation."""
+    """Exécute le pipeline d'analyse COMPLET optimisé."""
     if df.empty:
-        print("DataFrame vide reçu")
+        print("⚠ DataFrame vide")
         return pd.DataFrame(), pd.DataFrame()
     
-    print(f"🚀 Début de l'analyse sur {len(df)} tickets assignés")
-    start_time = time.time()
+    print(f"🚀 DÉMARRAGE ANALYSE SUR {len(df)} TICKETS")
+    total_start = time.time()
+    step_start = time.time()
+    
+    # Nettoyer les caches au début
+    if hasattr(calculate_semantique_score, '_cache'):
+        calculate_semantique_score._cache.clear()
+    if hasattr(calculate_concordance_score, '_cache'):
+        calculate_concordance_score._cache.clear()
     
     df['ClusterID'] = 0
     df['CategoryID'] = 0
     
-    print("📝 Calcul des scores sémantiques...")
-    # Traitement optimisé par lots
-    batch_size = 500
-    scores_semantiques = []
+    # === ÉTAPE 1: Scores sémantiques ===
+    print(f"\n[1/6] Calcul scores sémantiques...")
+    step_start = time.time()
+    
+    batch_size = 1000
+    semantic_scores = []
     
     for i in range(0, len(df), batch_size):
         batch = df.iloc[i:i+batch_size]
         batch_scores = batch['SolutionContent'].apply(calculate_semantique_score)
-        scores_semantiques.extend(batch_scores)
-        if i % 1500 == 0 and i > 0:
-            print(f"  Progression: {i}/{len(df)} tickets")
+        semantic_scores.extend(batch_scores)
+        
+        if i > 0 and i % 2000 == 0:
+            elapsed = time.time() - step_start
+            print(f"  Progression: {i}/{len(df)} tickets ({elapsed:.1f}s)")
     
-    df['ScoreSemantique'] = scores_semantiques
+    df['ScoreSemantique'] = semantic_scores
     df['NoteSemantique'] = df['ScoreSemantique'].apply(calculate_note_semantique)
     
-    print("📝 Calcul des scores de concordance...")
-    scores_concordance = []
+    step_time = time.time() - step_start
+    print(f"  ✓ Terminé en {step_time:.1f}s")
     
+    # === ÉTAPE 2: Scores concordance ===
+    print(f"\n[2/6] Calcul scores concordance...")
+    step_start = time.time()
+    
+    concordance_scores = []
     for i in range(0, len(df), batch_size):
         batch = df.iloc[i:i+batch_size]
         batch_scores = batch.apply(
             lambda row: calculate_concordance_score(row['ProblemDescription'], row['SolutionContent']),
             axis=1
         )
-        scores_concordance.extend(batch_scores)
-        if i % 1500 == 0 and i > 0:
-            print(f"  Progression: {i}/{len(df)} tickets")
+        concordance_scores.extend(batch_scores)
     
-    df['ScoreConcordance'] = scores_concordance
+    df['ScoreConcordance'] = concordance_scores
     df['NoteConcordance'] = df['ScoreConcordance'].apply(calculate_note_concordance)
     
-    print("⏱️ Calcul des notes temporelles...")
+    step_time = time.time() - step_start
+    print(f"  ✓ Terminé en {step_time:.1f}s")
+    
+    # === ÉTAPE 3: Notes temporelles ===
+    print(f"\n[3/6] Calcul notes temporelles...")
     df['NoteTemporelle'] = df['TempsHeures'].apply(calculate_temporal_note)
     
-    print("🧮 Calcul des notes finales...")
+    # === ÉTAPE 4: Notes finales ===
+    print(f"\n[4/6] Calcul notes finales...")
     df['TicketNote'] = df.apply(calculate_final_note, axis=1)
     
-    print("🏷️ Détermination des statuts...")
+    # === ÉTAPE 5: Statuts ===
+    print(f"\n[5/6] Détermination statuts...")
     df['Statut'] = df.apply(determine_final_status, axis=1)
     
-    print("👥 Calcul des moyennes employé...")
+    # === ÉTAPE 6: Moyennes employés ===
+    print(f"\n[6/6] Calcul moyennes employés...")
     df = calculate_employee_average(df)
     
-    print("🔗 Clustering avancé en cours...")
+    # === CLUSTERING ===
+    print(f"\n🔗 Lancement clustering...")
+    cluster_start = time.time()
+    
     cluster_results = pd.DataFrame()
     try:
         from utils.db_connector import load_categories_data
@@ -879,11 +765,15 @@ def run_full_analysis(df):
         df['ClusterID'] = df_with_clusters['ClusterID']
         df['CategoryID'] = df_with_clusters['CategoryID']
         
+        cluster_time = time.time() - cluster_start
+        print(f"  ✓ Clustering terminé en {cluster_time:.1f}s")
     except Exception as e:
-        print(f"⚠ Erreur clustering: {e}")
+        print(f"  ⚠ Erreur clustering: {e}")
         cluster_results = pd.DataFrame()
     
-    print("📊 Préparation des résultats...")
+    # === PRÉPARATION RÉSULTATS ===
+    print(f"\n📊 Préparation résultats...")
+    
     df_anomalies = df[[
         'TicketID', 'FactKey', 'AssigneeEmployeeKey', 'AssigneeFullName',
         'TicketNote', 'EmployeeAvgScore', 
@@ -893,21 +783,31 @@ def run_full_analysis(df):
         'Statut', 'ClusterID', 'CategoryID'
     ]].copy()
     
-    # Nettoyage des données numériques
-    numeric_cols = ['TicketNote', 'EmployeeAvgScore', 'NoteSemantique', 'NoteConcordance', 'NoteTemporelle']
-    for col in numeric_cols:
+    # Nettoyage valeurs numériques
+    for col in ['TicketNote', 'EmployeeAvgScore', 'NoteSemantique', 'NoteConcordance', 'NoteTemporelle']:
         if col in df_anomalies.columns:
             df_anomalies[col] = pd.to_numeric(df_anomalies[col], errors='coerce').fillna(0).round(2)
     
-    # Calcul du temps d'exécution
-    end_time = time.time()
-    execution_time = end_time - start_time
-    minutes = int(execution_time // 60)
-    seconds = int(execution_time % 60)
+    # === STATISTIQUES FINALES ===
+    total_time = time.time() - total_start
+    minutes = int(total_time // 60)
+    seconds = int(total_time % 60)
     
-    print(f"\n✅ ✅ ✅ ANALYSE TERMINÉE AVEC SUCCÈS!")
-    print(f"   ⏱️ Temps total: {minutes}m {seconds}s")
-    print(f"   📊 Tickets analysés: {len(df_anomalies)}")
-    print(f"   🔗 Clusters créés: {len(cluster_results)} (max {MAX_TOTAL_CLUSTERS})")
+    print(f"\n{'='*50}")
+    print(f"✅ ✅ ✅ ANALYSE TERMINÉE AVEC SUCCÈS!")
+    print(f"{'='*50}")
+    print(f"📊 STATISTIQUES:")
+    print(f"   ⏱️  Temps total: {minutes}m {seconds}s")
+    print(f"   🎯 Tickets analysés: {len(df_anomalies)}")
+    print(f"   🔗 Clusters créés: {len(cluster_results)}")
+    print(f"   ⚡ Performance: {len(df)/total_time:.1f} tickets/seconde")
+    
+    if not df_anomalies.empty:
+        avg_note = df_anomalies['TicketNote'].mean()
+        ok_count = len(df_anomalies[df_anomalies['Statut'] == 'OK'])
+        print(f"   📈 Note moyenne: {avg_note:.2f}/10")
+        print(f"   ✅ Tickets OK: {ok_count} ({ok_count/len(df)*100:.1f}%)")
+    
+    print(f"{'='*50}")
     
     return df_anomalies, cluster_results
