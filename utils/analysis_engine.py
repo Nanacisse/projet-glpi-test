@@ -54,8 +54,8 @@ try:
         # Vérifier si Java est disponible
         result = subprocess.run(['java', '-version'], capture_output=True, text=True, timeout=3)
         if result.returncode == 0:
-            tool = language_tool_python.LanguageTool('fr', timeout=10)
-            print("✓ Vérification grammaticale activée avec Java (optimisée)")
+            tool = language_tool_python.LanguageTool('fr')
+            print("✓ Vérification grammaticale activée avec Java")
         else:
             print("⚠ Java non disponible - Vérification grammaticale désactivée")
             tool = None
