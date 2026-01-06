@@ -19,7 +19,7 @@ st.markdown(hide_elements_style, unsafe_allow_html=True)
 
 # Configuration de base de l'application
 st.set_page_config(
-    page_title="YeshControl IA",
+    page_title="Yesh AI",
     page_icon="styles/icones/ai_icon.png", 
     layout="wide",
     initial_sidebar_state="collapsed"

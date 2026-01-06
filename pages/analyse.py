@@ -174,7 +174,7 @@ def render():
         st.markdown(f"""
         <div class='system-title'>
             <img src="data:image/png;base64,{ai_icon}">
-            <span class='system-title-text'>YeshControl AI</span>
+            <span class='system-title-text'>Yesh AI</span>
         </div>
         """, unsafe_allow_html=True)
         
