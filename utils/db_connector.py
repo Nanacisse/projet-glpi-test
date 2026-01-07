@@ -130,7 +130,6 @@ def save_analysis_results(df_anomalies: pd.DataFrame, cluster_results: pd.DataFr
             delete_old_data(conn)
                 
             if cluster_results is not None and not cluster_results.empty:
-                # ⭐⭐ CORRECTION : NE PAS INCLURE TempsMoyenHeures ⭐⭐
                 # Sélectionner uniquement les colonnes qui existent
                 available_columns = ['ProblemNameGroup', 'ClusterID', 'KeywordMatch', 'RecurrenceCount', 'CategoryID']
                 
@@ -138,7 +137,7 @@ def save_analysis_results(df_anomalies: pd.DataFrame, cluster_results: pd.DataFr
                 columns_to_use = [col for col in available_columns if col in cluster_results.columns]
                 
                 if len(columns_to_use) < 3:
-                    print("⚠ Pas assez de colonnes dans cluster_results")
+                    print(" Pas assez de colonnes dans cluster_results")
                     columns_to_use = ['ProblemNameGroup', 'ClusterID', 'KeywordMatch']
                 
                 clusters_to_save = cluster_results[columns_to_use].copy()
@@ -150,13 +149,10 @@ def save_analysis_results(df_anomalies: pd.DataFrame, cluster_results: pd.DataFr
                 if 'CategoryID' in clusters_to_save.columns:
                     clusters_to_save['CategoryID'] = clusters_to_save['CategoryID'].replace({np.nan: None}).fillna(0)
                 
-                print(f"💾 Préparation {len(clusters_to_save)} clusters...")
+                print(f" Préparation {len(clusters_to_save)} clusters...")
                 print(f"   Colonnes à sauvegarder: {list(clusters_to_save.columns)}")
                 
-                # ⭐⭐ NE PAS ajouter TempsMoyenHeures
-                # La ligne suivante était problématique :
-                # clusters_to_save['TempsMoyenHeures'] = cluster_times  # ⬅️ SUPPRIMER
-                
+    
                 # Insérer dans DimRecurrentProblems
                 clusters_to_save.to_sql(
                     'DimRecurrentProblems', 
@@ -164,7 +160,7 @@ def save_analysis_results(df_anomalies: pd.DataFrame, cluster_results: pd.DataFr
                     if_exists='append', 
                     index=False
                 )
-                print(f"✅ {len(clusters_to_save)} problèmes récurrents sauvegardés dans DimRecurrentProblems")
+                print(f" {len(clusters_to_save)} problèmes récurrents sauvegardés dans DimRecurrentProblems")
                 
                 # Créer un mapping pour mettre à jour les ClusterID dans df_anomalies
                 cluster_mapping = dict(zip(range(len(clusters_to_save)), clusters_to_save['ClusterID']))
@@ -195,7 +191,7 @@ def save_analysis_results(df_anomalies: pd.DataFrame, cluster_results: pd.DataFr
                 # S'assurer que les types de données sont corrects
                 anomalies_to_save['TempsHeures'] = pd.to_numeric(anomalies_to_save['TempsHeures'], errors='coerce').fillna(0)
                 
-                print(f"💾 Préparation {len(anomalies_to_save)} anomalies...")
+                print(f" Préparation {len(anomalies_to_save)} anomalies...")
                 
                 # Insérer dans FactAnomaliesDetail
                 anomalies_to_save.to_sql(
@@ -204,15 +200,15 @@ def save_analysis_results(df_anomalies: pd.DataFrame, cluster_results: pd.DataFr
                     if_exists='append', 
                     index=False
                 )
-                print(f"✅ {len(anomalies_to_save)} anomalies sauvegardées dans FactAnomaliesDetail")
+                print(f" {len(anomalies_to_save)} anomalies sauvegardées dans FactAnomaliesDetail")
             
             # Valider la transaction
             conn.commit()
-            print("🎉 Sauvegarde terminée avec succès!")
+            print(" Sauvegarde terminée avec succès!")
             return True
             
     except Exception as e:
-        print(f"❌ Erreur lors de la sauvegarde: {e}")
+        print(f" Erreur lors de la sauvegarde: {e}")
         import traceback
         traceback.print_exc()
         try:

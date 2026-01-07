@@ -32,9 +32,9 @@ MIN_TICKETS_PER_CLUSTER = 40       # Minimum pour cluster significatif
 MAX_TICKETS_PER_CLUSTER = 80       # Maximum avant division
 MIN_CLUSTER_SIZE = 3               # Minimum tickets pour créer cluster
 MAX_CATEGORIES_TO_USE = 25         # Maximum catégories DimCategory
-MAX_TICKETS_FOR_CLUSTERING = 1500  # ⭐ LIMITE pour performance
-GRAMMAR_CHECK_TIMEOUT = 2          # ⭐ Timeout vérification grammaticale
-MAX_TEXT_LENGTH_FOR_GRAMMAR = 500  # ⭐ Limite longueur texte
+MAX_TICKETS_FOR_CLUSTERING = 1500  # LIMITE pour performance
+GRAMMAR_CHECK_TIMEOUT = 2          # Timeout vérification grammaticale
+MAX_TEXT_LENGTH_FOR_GRAMMAR = 500  # Limite longueur texte
 
 # Initialisation des ressources
 nlp = None
@@ -483,7 +483,7 @@ def generate_group_name_from_keywords(keywords: str) -> str:
 def perform_advanced_clustering(df: pd.DataFrame, categories_data: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Effectue le clustering avancé OPTIMISÉ."""
     
-    print("🎯 Début clustering optimisé...")
+    print(" Début clustering optimisé...")
     start_time = time.time()
     
     cluster_results = []
@@ -497,7 +497,7 @@ def perform_advanced_clustering(df: pd.DataFrame, categories_data: pd.DataFrame)
         # === ÉTAPE 1: Correspondance rapide avec catégories ===
         categories_used = 0
         if not categories_data.empty and len(categories_data) > 0:
-            print(f"🔍 Recherche dans {min(len(categories_data), 20)} catégories...")
+            print(f" Recherche dans {min(len(categories_data), 20)} catégories...")
             
             # Prendre seulement les premières catégories pour performance
             for idx, category_row in categories_data.head(20).iterrows():
@@ -532,16 +532,16 @@ def perform_advanced_clustering(df: pd.DataFrame, categories_data: pd.DataFrame)
                     categories_used += 1
                     print(f"  ✓ {category_row['CategoryName']}: {len(matching_indices)} tickets")
         
-        print(f"✅ {categories_used} clusters catégories")
+        print(f" {categories_used} clusters catégories")
         
         # === ÉTAPE 2: ÉCHANTILLONNAGE INTELLIGENT ===
         remaining_indices = df_with_clusters[df_with_clusters['ClusterID'] == -1].index.tolist()
         remaining_count = len(remaining_indices)
         
-        print(f"📦 Tickets restants: {remaining_count}")
+        print(f" Tickets restants: {remaining_count}")
         
         if remaining_count > MAX_TICKETS_FOR_CLUSTERING:
-            print(f"⚠ Échantillonnage à {MAX_TICKETS_FOR_CLUSTERING} tickets pour performance")
+            print(f" Échantillonnage à {MAX_TICKETS_FOR_CLUSTERING} tickets pour performance")
             # Échantillonnage aléatoire stratifié
             remaining_indices = np.random.choice(
                 remaining_indices, 
@@ -552,7 +552,7 @@ def perform_advanced_clustering(df: pd.DataFrame, categories_data: pd.DataFrame)
         
         # === ÉTAPE 3: Clustering hiérarchique sur échantillon ===
         if remaining_count >= 50 and st_model:  # Minimum 50 tickets
-            print(f"🔗 Clustering sur {remaining_count} tickets...")
+            print(f" Clustering sur {remaining_count} tickets...")
             
             # Préparer descriptions
             descriptions = []
@@ -561,11 +561,11 @@ def perform_advanced_clustering(df: pd.DataFrame, categories_data: pd.DataFrame)
             for idx in remaining_indices:
                 desc = str(df.loc[idx, 'ProblemDescription'])
                 if desc and len(desc.strip()) > 20:
-                    descriptions.append(desc[:300])  # ⭐ Limiter longueur
+                    descriptions.append(desc[:300])  # Limiter longueur
                     valid_indices.append(idx)
             
             if len(descriptions) >= 20:
-                print(f"  📝 Encodage {len(descriptions)} descriptions...")
+                print(f"   Encodage {len(descriptions)} descriptions...")
                 
                 try:
                     # Encodage optimisé
@@ -585,19 +585,19 @@ def perform_advanced_clustering(df: pd.DataFrame, categories_data: pd.DataFrame)
                     )
                     
                     if clusters_needed >= 2:
-                        print(f"  🎯 Création {clusters_needed} clusters...")
+                        print(f"   Création {clusters_needed} clusters...")
                         
                         try:
                             from sklearn.cluster import MiniBatchKMeans
                             kmeans = MiniBatchKMeans(
                                 n_clusters=clusters_needed,
                                 random_state=42,
-                                batch_size=256,  # ⭐ Batch plus grand
-                                max_iter=50,     # ⭐ Moins d'itérations
-                                n_init=2         # ⭐ Moins d'initialisations
+                                batch_size=256,  # Batch plus grand
+                                max_iter=50,     # Moins d'itérations
+                                n_init=2         # Moins d'initialisations
                             )
                             labels = kmeans.fit_predict(embeddings)
-                            print("  ✅ Clustering terminé")
+                            print("   Clustering terminé")
                         except:
                             # Fallback à clustering hiérarchique
                             from sklearn.cluster import AgglomerativeClustering
@@ -664,19 +664,19 @@ def perform_advanced_clustering(df: pd.DataFrame, categories_data: pd.DataFrame)
         final_count = len(cluster_df)
         clustered_tickets = len(df_with_clusters[df_with_clusters['ClusterID'] != -1])
         
-        print(f"\n📊 RÉSULTATS CLUSTERING:")
-        print(f"   ✅ Clusters créés: {final_count}")
-        print(f"   ✅ Tickets clusterisés: {clustered_tickets}/{total_tickets}")
-        print(f"   ✅ Temps: {clustered_time:.1f}s")
+        print(f"\n RÉSULTATS CLUSTERING:")
+        print(f"    Clusters créés: {final_count}")
+        print(f"    Tickets clusterisés: {clustered_tickets}/{total_tickets}")
+        print(f"    Temps: {clustered_time:.1f}s")
         
         if final_count > 0:
             avg_size = cluster_df['RecurrenceCount'].mean()
-            print(f"   📈 Taille moyenne: {avg_size:.1f} tickets/cluster")
+            print(f"    Taille moyenne: {avg_size:.1f} tickets/cluster")
         
         return cluster_df, df_with_clusters
         
     except Exception as e:
-        print(f"❌ Erreur clustering: {str(e)[:100]}")
+        print(f" Erreur clustering: {str(e)[:100]}")
         
         # Solution de repli
         df_with_clusters['ClusterID'] = 0
@@ -698,7 +698,7 @@ def run_full_analysis(df):
         print("⚠ DataFrame vide")
         return pd.DataFrame(), pd.DataFrame()
     
-    print(f"🚀 DÉMARRAGE ANALYSE SUR {len(df)} TICKETS")
+    print(f" DÉMARRAGE ANALYSE SUR {len(df)} TICKETS")
     total_start = time.time()
     step_start = time.time()
     
@@ -735,7 +735,7 @@ def run_full_analysis(df):
     df['NoteSemantique'] = df['ScoreSemantique'].apply(calculate_note_semantique)
     
     step_time = time.time() - step_start
-    print(f"  ✓ Terminé en {step_time:.1f}s")
+    print(f"   Terminé en {step_time:.1f}s")
     
     # === ÉTAPE 2: Scores concordance ===
     print(f"\n[2/6] Calcul scores concordance...")
@@ -773,7 +773,7 @@ def run_full_analysis(df):
     df = calculate_employee_average(df)
     
     # === CLUSTERING ===
-    print(f"\n🔗 Lancement clustering...")
+    print(f"\n Lancement clustering...")
     cluster_start = time.time()
     
     cluster_results = pd.DataFrame()
@@ -788,11 +788,11 @@ def run_full_analysis(df):
         cluster_time = time.time() - cluster_start
         print(f"  ✓ Clustering terminé en {cluster_time:.1f}s")
     except Exception as e:
-        print(f"  ⚠ Erreur clustering: {e}")
+        print(f"   Erreur clustering: {e}")
         cluster_results = pd.DataFrame()
     
     # === PRÉPARATION RÉSULTATS ===
-    print(f"\n📊 Préparation résultats...")
+    print(f"\n Préparation résultats...")
     
     df_anomalies = df[[
         'TicketID', 'FactKey', 'AssigneeEmployeeKey', 'AssigneeFullName',
@@ -814,19 +814,19 @@ def run_full_analysis(df):
     seconds = int(total_time % 60)
     
     print(f"\n{'='*50}")
-    print(f"✅ ✅ ✅ ANALYSE TERMINÉE AVEC SUCCÈS!")
+    print(f" ANALYSE TERMINÉE AVEC SUCCÈS!")
     print(f"{'='*50}")
-    print(f"📊 STATISTIQUES:")
-    print(f"   ⏱️  Temps total: {minutes}m {seconds}s")
-    print(f"   🎯 Tickets analysés: {len(df_anomalies)}")
-    print(f"   🔗 Clusters créés: {len(cluster_results)}")
-    print(f"   ⚡ Performance: {len(df)/total_time:.1f} tickets/seconde")
+    print(f"STATISTIQUES:")
+    print(f"   Temps total: {minutes}m {seconds}s")
+    print(f"   Tickets analysés: {len(df_anomalies)}")
+    print(f"   Clusters créés: {len(cluster_results)}")
+    print(f"   Performance: {len(df)/total_time:.1f} tickets/seconde")
     
     if not df_anomalies.empty:
         avg_note = df_anomalies['TicketNote'].mean()
         ok_count = len(df_anomalies[df_anomalies['Statut'] == 'OK'])
-        print(f"   📈 Note moyenne: {avg_note:.2f}/10")
-        print(f"   ✅ Tickets OK: {ok_count} ({ok_count/len(df)*100:.1f}%)")
+        print(f"   Note moyenne: {avg_note:.2f}/10")
+        print(f"   Tickets OK: {ok_count} ({ok_count/len(df)*100:.1f}%)")
     
     print(f"{'='*50}")
     
