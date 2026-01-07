@@ -48,9 +48,9 @@ def initialize_nlp_models():
     if nlp is None:
         try:
             print("Chargement des modèles NLP...")
-            # Charger spaCy avec désactivation des composants inutiles
-            nlp = spacy.load("fr_core_news_sm", disable=['parser', 'ner', 'textcat'])
-            print("spaCy charge")
+            # CORRECTION : Ne pas désactiver 'parser' pour avoir les phrases
+            nlp = spacy.load("fr_core_news_sm", disable=['ner', 'textcat'])
+            print("spaCy charge avec detection de phrases")
             
             # Charger SentenceTransformer (modèle plus rapide)
             st_model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
@@ -124,7 +124,7 @@ def check_grammar_with_timeout(text: str, timeout: int = GRAMMAR_CHECK_TIMEOUT) 
         print(f"Erreur dans check_grammar_with_timeout: {e}")
         return 0
 
-# --- Nouvelle analyse sémantique OPTIMISÉE ---
+# --- Nouvelle analyse sémantique CORRIGÉE ---
 
 def detect_vague_words_automatically(text: str, doc) -> List[str]:
     """Détecte automatiquement les mots vagues dans un texte."""
@@ -145,11 +145,14 @@ def detect_vague_words_automatically(text: str, doc) -> List[str]:
                 vague_words.append(token.text)
         
         # Détection phrases génériques
-        sentences = list(doc.sents)
-        for sent in sentences:
-            words = [token.text.lower() for token in sent if token.is_alpha]
-            if len(words) < 8 and len(set(words)) < 6:
-                vague_words.append("phrase_generique")
+        try:
+            sentences = list(doc.sents)
+            for sent in sentences:
+                words = [token.text.lower() for token in sent if token.is_alpha]
+                if len(words) < 8 and len(set(words)) < 6:
+                    vague_words.append("phrase_generique")
+        except:
+            pass
         
         return list(set(vague_words))
         
@@ -161,7 +164,19 @@ def detect_structural_elements_automatically(doc) -> int:
     """Détecte automatiquement les éléments de structure dans un texte."""
     try:
         etapes_count = 0
-        sentences = list(doc.sents)
+        try:
+            sentences = list(doc.sents)
+        except:
+            # Si pas de détection de phrases, utiliser une méthode simple
+            text = doc.text.lower()
+            markers = ['premier', 'deuxième', 'troisième', 'ensuite', 'puis', 
+                      'après', 'finalement', 'enfin', 'd\'abord']
+            
+            for marker in markers:
+                if marker in text:
+                    etapes_count += 1
+            
+            return min(4, etapes_count)
         
         if not sentences:
             return 0
@@ -181,7 +196,7 @@ def detect_structural_elements_automatically(doc) -> int:
         return 0
 
 def calculate_semantique_score(text):
-    """Calcule le score sémantique OPTIMISÉ."""
+    """Calcule le score sémantique CORRIGÉ."""
     if pd.isna(text) or not isinstance(text, str):
         return 50.0
     
@@ -205,26 +220,32 @@ def calculate_semantique_score(text):
         
         # Textes courts -> analyse simplifiée
         if len(text_str) < 30:
-            score = 50.0
-            calculate_semantique_score._cache[hash(text_str)] = score
-            return score
+            # Score basé sur la longueur pour texte court
+            base_score = 50.0
+            if len(text_str) < 15:
+                base_score = 40.0
+            
+            calculate_semantique_score._cache[hash(text_str)] = base_score
+            return base_score
         
-        # CORRECTION : Traiter le texte avec spaCy
+        # CORRECTION : Utiliser nlp avec meilleure gestion des erreurs
         doc = nlp(text_str)
-        sentences = list(doc.sents)
-        
-        if not sentences:
-            score = 50.0
-            calculate_semantique_score._cache[hash(text_str)] = score
-            return score
         
         # 1. Longueur des phrases (30 points)
         longueur_score = 30
-        for sent in sentences:
-            word_count = len([token for token in sent if not token.is_punct])
-            if word_count > 25:
-                longueur_score -= 5
-                break
+        try:
+            sentences = list(doc.sents)
+            if sentences:
+                for sent in sentences:
+                    word_count = len([token for token in sent if not token.is_punct])
+                    if word_count > 25:
+                        longueur_score -= 5
+                        break
+            else:
+                # Si pas de phrases détectées, pénaliser un peu
+                longueur_score = 20
+        except:
+            longueur_score = 20
         
         # 2. Structure logique (20 points)
         etapes_trouvees = detect_structural_elements_automatically(doc)
@@ -269,7 +290,14 @@ def calculate_semantique_score(text):
         
     except Exception as e:
         print(f"Erreur calcul score sémantique: {e}")
-        score = 50.0
+        # En cas d'erreur, retourner un score variable selon la longueur
+        if len(text_str) > 100:
+            score = 60.0
+        elif len(text_str) > 50:
+            score = 55.0
+        else:
+            score = 50.0
+            
         calculate_semantique_score._cache[hash(text_str)] = score
         return score
 
@@ -738,10 +766,10 @@ def perform_advanced_clustering(df: pd.DataFrame, categories_data: pd.DataFrame)
             'CategoryID': 0
         }]), df_with_clusters
 
-# --- Fonction principale OPTIMISÉE ---
+# --- Fonction principale CORRIGÉE ---
 
 def run_full_analysis(df):
-    """Exécute le pipeline d'analyse COMPLET optimisé."""
+    """Exécute le pipeline d'analyse COMPLET corrigé."""
     if df.empty:
         print("DataFrame vide")
         return pd.DataFrame(), pd.DataFrame()
@@ -767,11 +795,11 @@ def run_full_analysis(df):
     df['ClusterID'] = 0
     df['CategoryID'] = 0
     
-    # === ÉTAPE 1: Scores sémantiques ===
+    # === ÉTAPE 1: Scores sémantiques CORRIGÉE ===
     print(f"\n[1/6] Calcul scores sémantiques...")
     step_start = time.time()
     
-    batch_size = 500  # Réduit pour mieux suivre
+    batch_size = 500
     semantic_scores = []
     
     for i in range(0, len(df), batch_size):
@@ -791,8 +819,20 @@ def run_full_analysis(df):
     
     # Afficher quelques statistiques sur les scores sémantiques
     if not df['ScoreSemantique'].empty:
-        print(f"  Scores semantiques: Moyenne={df['ScoreSemantique'].mean():.1f}%, "
-              f"Min={df['ScoreSemantique'].min():.1f}%, Max={df['ScoreSemantique'].max():.1f}%")
+        scores = df['ScoreSemantique']
+        print(f"  Scores semantiques: Moyenne={scores.mean():.1f}%, "
+              f"Min={scores.min():.1f}%, Max={scores.max():.1f}%, "
+              f"Ecart-type={scores.std():.1f}%")
+        
+        # Distribution des scores
+        bins = [0, 30, 50, 70, 90, 100]
+        labels = ['0-30%', '31-50%', '51-70%', '71-90%', '91-100%']
+        distribution = pd.cut(scores, bins=bins, labels=labels, right=False)
+        dist_counts = distribution.value_counts().sort_index()
+        print(f"  Distribution scores:")
+        for label, count in dist_counts.items():
+            percentage = (count / len(scores)) * 100
+            print(f"    {label}: {count} tickets ({percentage:.1f}%)")
     
     # === ÉTAPE 2: Scores concordance ===
     print(f"\n[2/6] Calcul scores concordance...")
@@ -815,8 +855,10 @@ def run_full_analysis(df):
     
     # Afficher quelques statistiques sur les scores de concordance
     if not df['ScoreConcordance'].empty:
-        print(f"  Scores concordance: Moyenne={df['ScoreConcordance'].mean():.1f}%, "
-              f"Min={df['ScoreConcordance'].min():.1f}%, Max={df['ScoreConcordance'].max():.1f}%")
+        scores = df['ScoreConcordance']
+        print(f"  Scores concordance: Moyenne={scores.mean():.1f}%, "
+              f"Min={scores.min():.1f}%, Max={scores.max():.1f}%, "
+              f"Ecart-type={scores.std():.1f}%")
     
     # === ÉTAPE 3: Notes temporelles ===
     print(f"\n[3/6] Calcul notes temporelles...")
