@@ -173,15 +173,15 @@ def render():
     # Application des filtres
     df_filtre = df_data.copy()
     
-    # FILTRE EMPLOYÉ - CORRECTION ICI
+    # FILTRE EMPLOYÉ 
     if employe_filtre != 'Tous' and 'AssigneeFullName' in df_filtre.columns:
         df_filtre = df_filtre[df_filtre['AssigneeFullName'] == employe_filtre]
     
-    # FILTRE TYPE D'ANOMALIE - CORRECTION ICI
+    # FILTRE TYPE D'ANOMALIE 
     if type_filtre != 'Tous' and 'Statut' in df_filtre.columns:
         df_filtre = df_filtre[df_filtre['Statut'] == type_filtre]
     
-    # FILTRE DATE - CORRECTION ICI
+    # FILTRE DATE 
     if date_filtre and 'DateCreation' in df_filtre.columns:
         try:
             # Convertir en datetime et comparer les dates seulement
@@ -224,7 +224,7 @@ def render():
             <div style='font-size: 24px; font-weight: bold; color: #333;'>{ecart_type:.2f}h</div>
         </div>
         <div style='text-align: center; flex: 1;'>
-            <div style='font-size: 14px; font-weight: bold; color: #2e2a80;'>SLA Référence</div>
+            <div style='font-size: 14px; font-weight: bold; color: #2e2a80;'>SLA</div>
             <div style='font-size: 24px; font-weight: bold; color: #333;'>4h</div>
         </div>
     </div>
