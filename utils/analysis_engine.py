@@ -73,11 +73,11 @@ def load_cached_results(data_hash: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
         with open(cache_file, 'rb') as f:
             cached_data = pickle.load(f)
         
-        print(f"📦 Résultats chargés depuis le cache (hash: {data_hash[:8]}...)")
+        print(f"Résultats chargés depuis le cache (hash: {data_hash[:8]}...)")
         return cached_data['anomalies'], cached_data['clusters']
         
     except Exception as e:
-        print(f"⚠ Erreur chargement cache: {e}")
+        print(f"Erreur chargement cache: {e}")
         return None, None
 
 def save_to_cache(data_hash: str, df_anomalies: pd.DataFrame, cluster_results: pd.DataFrame):
@@ -94,7 +94,7 @@ def save_to_cache(data_hash: str, df_anomalies: pd.DataFrame, cluster_results: p
         with open(cache_file, 'wb') as f:
             pickle.dump(cache_data, f)
         
-        print(f"💾 Résultats sauvegardés dans le cache (hash: {data_hash[:8]}...)")
+        print(f"Résultats sauvegardés dans le cache (hash: {data_hash[:8]}...)")
         
         # Nettoyer les anciens fichiers cache (garder seulement les 5 derniers)
         cache_files = [f for f in os.listdir(CACHE_DIR) if f.startswith('analysis_cache_')]
@@ -104,7 +104,7 @@ def save_to_cache(data_hash: str, df_anomalies: pd.DataFrame, cluster_results: p
                 os.remove(os.path.join(CACHE_DIR, old_file))
         
     except Exception as e:
-        print(f"⚠ Erreur sauvegarde cache: {e}")
+        print(f" Erreur sauvegarde cache: {e}")
 
 # Initialisation des ressources
 nlp = None

@@ -17,6 +17,11 @@ try:
 except ImportError:
     HAS_OPENPYXL = False
 
+# DÉSACTIVER LE CACHE STREAMLIT POUR ÉVITER LES NOTIFICATIONS
+@st.cache_data(show_spinner=False, persist=False)
+def get_cached_data():
+    return None
+
 # GÉRER L'ÉTAT DES FILTRES
 if 'filters_applied' not in st.session_state:
     st.session_state['filters_applied'] = False
@@ -83,11 +88,6 @@ def get_status_with_icon(status):
 def render():
     """Affiche le contenu de la Page 2."""
     
-    # Afficher une notification si le cache a été utilisé
-    if st.session_state.get('cache_used', False):
-        st.success("✅ Résultats chargés depuis le cache (données inchangées)")
-        st.session_state['cache_used'] = False
-    
     # GESTION DU BOUTON RETOUR
     col_retour, col_titre = st.columns([0.1, 0.9])
     with col_retour:
@@ -123,7 +123,7 @@ def render():
     # COLONNE DATE CRÉATION AJOUTÉE ICI
     if 'DateCreation' in df_display.columns:
         try:
-            display_columns['Date Création Ticket'] = pd.to_datetime(df_display['DateCreation']).dt.strftime('%d/%m/%Y')
+            display_columns['Date Création Ticket'] = pd.to_datetime(df_display['DateCreation']).dt.strftime('%Y/%m/%d')
         except:
             display_columns['Date Création Ticket'] = df_display['DateCreation']
     
@@ -181,41 +181,47 @@ def render():
         type_filtre = st.selectbox("Type d'anomalie", all_statuses, key="filtre_type")
     
     with col3:
-        # FILTRE DATE AVEC OPTION "TOUTES"
+        # FILTRE DATE AVEC DATE INPUT (COMME SUR L'IMAGE)
         if 'DateCreation' in df_data.columns:
             try:
-                dates_series = pd.to_datetime(df_data['DateCreation'])
-                if not dates_series.empty:
-                    unique_dates = sorted(dates_series.dt.date.unique())
-                    date_options = ['Toutes'] + [date.strftime('%d/%m/%Y') for date in unique_dates]
-                    
-                    date_selected = st.selectbox(
-                        "Date création ticket",
-                        date_options,
-                        index=0,
-                        key="filtre_date"
-                    )
-                    
-                    if date_selected != 'Toutes':
-                        date_filtre = datetime.strptime(date_selected, '%d/%m/%Y').date()
+                # Convertir les dates en format datetime
+                df_data['DateCreation_dt'] = pd.to_datetime(df_data['DateCreation'])
+                
+                # Trouver la date min et max
+                min_date = df_data['DateCreation_dt'].min().date()
+                max_date = df_data['DateCreation_dt'].max().date()
+                
+                # Afficher le date picker avec format YYYY/MM/DD
+                date_filtre = st.date_input(
+                    "Date création ticket",
+                    value=None,  # Pas de date par défaut
+                    min_value=min_date,
+                    max_value=max_date,
+                    format="YYYY/MM/DD",
+                    key="filtre_date"
+                )
+                
+                # date_filtre peut être None, une date unique, ou un tuple (start, end)
+                # On gère comme filtre unique
+                if date_filtre:
+                    if isinstance(date_filtre, tuple):
+                        date_selected = date_filtre[0] if date_filtre[0] else None
                     else:
-                        date_filtre = None
+                        date_selected = date_filtre
                 else:
-                    date_filtre = None
-                    date_selected = 'Toutes'
+                    date_selected = None
+                    
             except Exception as e:
-                print(f"Erreur traitement dates: {e}")
-                date_filtre = None
-                date_selected = 'Toutes'
+                st.error(f"Erreur traitement dates: {e}")
+                date_selected = None
         else:
-            date_filtre = None
-            date_selected = 'Toutes'
+            date_selected = None
 
     # TRACKER LES CHANGEMENTS DE FILTRES
     current_filters = {
         'employe_filtre': employe_filtre,
         'type_filtre': type_filtre,
-        'date_selected': date_selected
+        'date_selected': str(date_selected) if date_selected else None
     }
     
     filters_changed = current_filters != st.session_state.get('last_filters', {})
@@ -234,12 +240,12 @@ def render():
     if type_filtre != 'Tous' and 'Statut' in df_filtre.columns:
         df_filtre = df_filtre[df_filtre['Statut'] == type_filtre]
     
-    if date_filtre and 'DateCreation' in df_filtre.columns:
+    if date_selected and 'DateCreation' in df_filtre.columns:
         try:
             df_filtre['DateCreation_dt'] = pd.to_datetime(df_filtre['DateCreation'])
-            df_filtre = df_filtre[df_filtre['DateCreation_dt'].dt.date == date_filtre]
+            df_filtre = df_filtre[df_filtre['DateCreation_dt'].dt.date == date_selected]
         except Exception as e:
-            print(f"Erreur filtrage date: {e}")
+            st.error(f"Erreur filtrage date: {e}")
 
     # PRÉPARATION AFFICHAGE FILTRÉ
     if not df_filtre.empty:
@@ -345,6 +351,14 @@ def render():
         table td {
             text-align: center !important;
             vertical-align: middle !important;
+        }
+        
+        /* Masquer la notification de cache Streamlit */
+        .stAlert {
+            display: none !important;
+        }
+        div[data-testid="stDecoration"] {
+            display: none !important;
         }
         </style>
         """, unsafe_allow_html=True)
