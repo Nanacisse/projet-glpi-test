@@ -118,7 +118,7 @@ def delete_old_data(conn):
         return True
 
 def save_analysis_results(df_anomalies: pd.DataFrame, cluster_results: pd.DataFrame):
-    """Sauvegarde les résultats d'analyse SANS TempsMoyenHeures."""
+    """Sauvegarde les résultats d'analyse."""
     if engine is None:
         print("Erreur: Moteur de base de données non initialisé.")
         return False
@@ -152,7 +152,6 @@ def save_analysis_results(df_anomalies: pd.DataFrame, cluster_results: pd.DataFr
                 print(f" Préparation {len(clusters_to_save)} clusters...")
                 print(f"   Colonnes à sauvegarder: {list(clusters_to_save.columns)}")
                 
-    
                 # Insérer dans DimRecurrentProblems
                 clusters_to_save.to_sql(
                     'DimRecurrentProblems', 
@@ -170,28 +169,48 @@ def save_analysis_results(df_anomalies: pd.DataFrame, cluster_results: pd.DataFr
                     df_anomalies['ClusterID'] = df_anomalies['ClusterID'].map(cluster_mapping).fillna(0)
             
             if not df_anomalies.empty:
-                # Préparer les données pour FactAnomaliesDetail
-                anomalies_to_save = df_anomalies[[
+                # Préparer les données pour FactAnomaliesDetail - INCLURE DateCreation
+                # Identifier quelles colonnes existent
+                possible_columns = [
                     'TicketID', 'FactKey', 'AssigneeEmployeeKey', 'AssigneeFullName',
                     'TicketNote', 'EmployeeAvgScore', 'ScoreSemantique', 'NoteSemantique',
                     'ScoreConcordance', 'NoteConcordance', 'TempsHeures', 'NoteTemporelle',
-                    'Statut', 'ClusterID', 'CategoryID'
-                ]].copy()
+                    'Statut', 'ClusterID', 'CategoryID', 'DateCreation'
+                ]
+                
+                # Filtrer seulement les colonnes qui existent
+                columns_to_save = [col for col in possible_columns if col in df_anomalies.columns]
+                
+                anomalies_to_save = df_anomalies[columns_to_save].copy()
                 
                 # Remplir les valeurs NaN
-                anomalies_to_save = anomalies_to_save.fillna({
+                fill_values = {
                     'TicketNote': 0, 'EmployeeAvgScore': 0, 
                     'ScoreSemantique': 0, 'NoteSemantique': 0,
                     'ScoreConcordance': 0, 'NoteConcordance': 0,
                     'TempsHeures': 0, 'NoteTemporelle': 0,
                     'Statut': 'Non Déterminé', 'ClusterID': 0,
                     'CategoryID': 0
-                })
+                }
+                
+                # Appliquer seulement aux colonnes qui existent
+                for col, default_value in fill_values.items():
+                    if col in anomalies_to_save.columns:
+                        anomalies_to_save[col] = anomalies_to_save[col].fillna(default_value)
                 
                 # S'assurer que les types de données sont corrects
-                anomalies_to_save['TempsHeures'] = pd.to_numeric(anomalies_to_save['TempsHeures'], errors='coerce').fillna(0)
+                if 'TempsHeures' in anomalies_to_save.columns:
+                    anomalies_to_save['TempsHeures'] = pd.to_numeric(anomalies_to_save['TempsHeures'], errors='coerce').fillna(0)
+                
+                if 'DateCreation' in anomalies_to_save.columns:
+                    # Convertir DateCreation en format datetime pour SQL Server
+                    try:
+                        anomalies_to_save['DateCreation'] = pd.to_datetime(anomalies_to_save['DateCreation'], errors='coerce')
+                    except:
+                        anomalies_to_save['DateCreation'] = None
                 
                 print(f" Préparation {len(anomalies_to_save)} anomalies...")
+                print(f"   Colonnes à sauvegarder: {list(anomalies_to_save.columns)}")
                 
                 # Insérer dans FactAnomaliesDetail
                 anomalies_to_save.to_sql(
@@ -204,11 +223,11 @@ def save_analysis_results(df_anomalies: pd.DataFrame, cluster_results: pd.DataFr
             
             # Valider la transaction
             conn.commit()
-            print(" Sauvegarde terminée avec succès!")
+            print(" ✅ Sauvegarde terminée avec succès!")
             return True
             
     except Exception as e:
-        print(f" Erreur lors de la sauvegarde: {e}")
+        print(f" ❌ Erreur lors de la sauvegarde: {e}")
         import traceback
         traceback.print_exc()
         try:

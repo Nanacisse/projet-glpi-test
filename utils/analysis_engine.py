@@ -14,6 +14,10 @@ import time
 import subprocess
 import threading
 from queue import Queue
+from datetime import datetime
+import hashlib
+import pickle
+import os
 
 # Supprimer les warnings
 warnings.filterwarnings('ignore')
@@ -35,6 +39,72 @@ MAX_CATEGORIES_TO_USE = 25         # Maximum catégories DimCategory
 MAX_TICKETS_FOR_CLUSTERING = 1500  # LIMITE pour performance
 GRAMMAR_CHECK_TIMEOUT = 2          # Timeout vérification grammaticale
 MAX_TEXT_LENGTH_FOR_GRAMMAR = 500  # Limite longueur texte
+
+# --- Système de Cache ---
+CACHE_DIR = "cache"
+if not os.path.exists(CACHE_DIR):
+    os.makedirs(CACHE_DIR)
+
+def get_data_hash(df: pd.DataFrame) -> str:
+    """Calcule un hash des données pour vérifier si elles ont changé."""
+    # Créer une chaîne à partir des colonnes clés
+    key_columns = ['TicketID', 'ProblemDescription', 'SolutionContent', 'ResolutionDurationSec']
+    available_columns = [col for col in key_columns if col in df.columns]
+    
+    if not available_columns:
+        return "no_hash"
+    
+    # Concaténer les valeurs des colonnes clés
+    data_string = ""
+    for col in available_columns:
+        data_string += df[col].astype(str).sum()
+    
+    # Calculer le hash MD5
+    return hashlib.md5(data_string.encode()).hexdigest()
+
+def load_cached_results(data_hash: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Charge les résultats depuis le cache s'ils existent."""
+    cache_file = f"{CACHE_DIR}/analysis_cache_{data_hash}.pkl"
+    
+    try:
+        if not os.path.exists(cache_file):
+            return None, None
+        
+        with open(cache_file, 'rb') as f:
+            cached_data = pickle.load(f)
+        
+        print(f"📦 Résultats chargés depuis le cache (hash: {data_hash[:8]}...)")
+        return cached_data['anomalies'], cached_data['clusters']
+        
+    except Exception as e:
+        print(f"⚠ Erreur chargement cache: {e}")
+        return None, None
+
+def save_to_cache(data_hash: str, df_anomalies: pd.DataFrame, cluster_results: pd.DataFrame):
+    """Sauvegarde les résultats dans le cache."""
+    try:
+        cache_file = f"{CACHE_DIR}/analysis_cache_{data_hash}.pkl"
+        
+        cache_data = {
+            'anomalies': df_anomalies,
+            'clusters': cluster_results,
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+        
+        with open(cache_file, 'wb') as f:
+            pickle.dump(cache_data, f)
+        
+        print(f"💾 Résultats sauvegardés dans le cache (hash: {data_hash[:8]}...)")
+        
+        # Nettoyer les anciens fichiers cache (garder seulement les 5 derniers)
+        cache_files = [f for f in os.listdir(CACHE_DIR) if f.startswith('analysis_cache_')]
+        if len(cache_files) > 5:
+            cache_files.sort(key=lambda x: os.path.getmtime(os.path.join(CACHE_DIR, x)))
+            for old_file in cache_files[:-5]:
+                os.remove(os.path.join(CACHE_DIR, old_file))
+        
+    except Exception as e:
+        print(f"⚠ Erreur sauvegarde cache: {e}")
 
 # Initialisation des ressources
 nlp = None
@@ -776,6 +846,30 @@ def run_full_analysis(df):
     
     print(f"DEMARRAGE ANALYSE SUR {len(df)} TICKETS")
     total_start = time.time()
+    
+    # === NOUVEAU : VÉRIFICATION DU CACHE ===
+    print(f"\n[0/6] Vérification du cache...")
+    
+    # Calculer le hash des données
+    data_hash = get_data_hash(df)
+    print(f"  Hash des données: {data_hash[:16]}...")
+    
+    # Essayer de charger depuis le cache
+    cached_anomalies, cached_clusters = load_cached_results(data_hash)
+    
+    if cached_anomalies is not None and cached_clusters is not None:
+        # Vérifier que les données en cache correspondent
+        if len(cached_anomalies) == len(df):
+            print(f"✅ Données trouvées dans le cache !")
+            print(f"   Temps gagné: ~30-60 secondes")
+            
+            # Marquer que c'est depuis le cache
+            run_full_analysis._from_cache = True
+            return cached_anomalies, cached_clusters
+    
+    print(f"⏳ Données non trouvées dans le cache, lancement de l'analyse...")
+    run_full_analysis._from_cache = False
+    
     step_start = time.time()
     
     # Initialiser les modèles NLP si nécessaire
@@ -909,13 +1003,17 @@ def run_full_analysis(df):
         'ScoreSemantique', 'NoteSemantique',
         'ScoreConcordance', 'NoteConcordance',
         'TempsHeures', 'NoteTemporelle',
-        'Statut', 'ClusterID', 'CategoryID'
+        'Statut', 'ClusterID', 'CategoryID', 'DateCreation'
     ]].copy()
     
     # Nettoyage valeurs numériques
     for col in ['TicketNote', 'EmployeeAvgScore', 'NoteSemantique', 'NoteConcordance', 'NoteTemporelle']:
         if col in df_anomalies.columns:
             df_anomalies[col] = pd.to_numeric(df_anomalies[col], errors='coerce').fillna(0).round(2)
+    
+    # === NOUVEAU : SAUVEGARDE DANS LE CACHE ===
+    print(f"\n💾 Sauvegarde des résultats dans le cache...")
+    save_to_cache(data_hash, df_anomalies, cluster_results)
     
     # === STATISTIQUES FINALES ===
     total_time = time.time() - total_start

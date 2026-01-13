@@ -3,6 +3,7 @@ import pandas as pd
 import io
 import base64
 from datetime import datetime
+import os
 
 try:
     from fpdf import FPDF
@@ -15,6 +16,16 @@ try:
     HAS_OPENPYXL = True
 except ImportError:
     HAS_OPENPYXL = False
+
+# GÉRER L'ÉTAT DES FILTRES
+if 'filters_applied' not in st.session_state:
+    st.session_state['filters_applied'] = False
+if 'last_filters' not in st.session_state:
+    st.session_state['last_filters'] = {}
+if 'return_clicked' not in st.session_state:
+    st.session_state['return_clicked'] = False
+if 'cache_used' not in st.session_state:
+    st.session_state['cache_used'] = False
 
 def export_to_pdf(df):
     """Génère un PDF à partir du DataFrame."""
@@ -72,12 +83,25 @@ def get_status_with_icon(status):
 def render():
     """Affiche le contenu de la Page 2."""
     
+    # Afficher une notification si le cache a été utilisé
+    if st.session_state.get('cache_used', False):
+        st.success("✅ Résultats chargés depuis le cache (données inchangées)")
+        st.session_state['cache_used'] = False
+    
+    # GESTION DU BOUTON RETOUR
     col_retour, col_titre = st.columns([0.1, 0.9])
     with col_retour:
-        if st.button("←", key="retour_analyse", help="Retour à l'analyse"):
+        return_clicked = st.button("←", key="retour_analyse", help="Retour à l'analyse")
+        if return_clicked:
+            st.session_state['return_clicked'] = True
             st.session_state['current_page'] = 1
             st.session_state['analysis_started'] = False
+            st.session_state['filters_applied'] = False
             st.rerun()
+            return  # ARRÊTER ICI
+    
+    # Réinitialiser le flag de retour
+    st.session_state['return_clicked'] = False
     
     df_data = st.session_state.get('anomaly_data')
     if df_data is None or (isinstance(df_data, pd.DataFrame) and df_data.empty):
@@ -95,6 +119,13 @@ def render():
         display_columns['Nom Employé'] = df_display['AssigneeFullName']
     else:
         display_columns['Nom Employé'] = "Non spécifié"
+    
+    # COLONNE DATE CRÉATION AJOUTÉE ICI
+    if 'DateCreation' in df_display.columns:
+        try:
+            display_columns['Date Création Ticket'] = pd.to_datetime(df_display['DateCreation']).dt.strftime('%d/%m/%Y')
+        except:
+            display_columns['Date Création Ticket'] = df_display['DateCreation']
     
     if 'TempsHeures' in df_display.columns:
         display_columns['Temps de résolution (h)'] = df_display['TempsHeures'].apply(lambda x: f"{x:.2f}")
@@ -131,15 +162,14 @@ def render():
     </div>
     """, unsafe_allow_html=True)
 
-    # Filtres
+    # FILTRES
     col1, col2, col3, col4 = st.columns([0.23, 0.23, 0.23, 0.31])
     
     with col1:
         if 'Nom Employé' in df_display_final.columns:
-            # Récupérer la liste des employés depuis les données d'origine
             if 'AssigneeFullName' in df_data.columns:
                 employes_list = ['Tous'] + sorted(df_data['AssigneeFullName'].dropna().unique().tolist())
-                employe_filtre = st.selectbox("Nom employé", employes_list)
+                employe_filtre = st.selectbox("Nom employé", employes_list, key="filtre_employe")
             else:
                 employe_filtre = 'Tous'
         else:
@@ -148,57 +178,76 @@ def render():
     with col2:
         all_statuses = ['Tous', 'OK', 'Anomalie de Temps', 'Anomalie Sémantique', 
                        'Anomalie de Concordance', 'Multiples Anomalies', 'Anomalie Indéterminée']
-        type_filtre = st.selectbox("Type d'anomalie", all_statuses)
+        type_filtre = st.selectbox("Type d'anomalie", all_statuses, key="filtre_type")
     
     with col3:
+        # FILTRE DATE AVEC OPTION "TOUTES"
         if 'DateCreation' in df_data.columns:
             try:
-                dates = pd.to_datetime(df_data['DateCreation']).dt.date
-                if not dates.empty:
-                    min_date = dates.min()
-                    max_date = dates.max()
-                    date_filtre = st.date_input(
-                        "Date création",
-                        value=None,
-                        min_value=min_date,
-                        max_value=max_date
+                dates_series = pd.to_datetime(df_data['DateCreation'])
+                if not dates_series.empty:
+                    unique_dates = sorted(dates_series.dt.date.unique())
+                    date_options = ['Toutes'] + [date.strftime('%d/%m/%Y') for date in unique_dates]
+                    
+                    date_selected = st.selectbox(
+                        "Date création ticket",
+                        date_options,
+                        index=0,
+                        key="filtre_date"
                     )
+                    
+                    if date_selected != 'Toutes':
+                        date_filtre = datetime.strptime(date_selected, '%d/%m/%Y').date()
+                    else:
+                        date_filtre = None
                 else:
                     date_filtre = None
-            except:
+                    date_selected = 'Toutes'
+            except Exception as e:
+                print(f"Erreur traitement dates: {e}")
                 date_filtre = None
+                date_selected = 'Toutes'
         else:
             date_filtre = None
+            date_selected = 'Toutes'
 
-    # Application des filtres
+    # TRACKER LES CHANGEMENTS DE FILTRES
+    current_filters = {
+        'employe_filtre': employe_filtre,
+        'type_filtre': type_filtre,
+        'date_selected': date_selected
+    }
+    
+    filters_changed = current_filters != st.session_state.get('last_filters', {})
+    
+    if filters_changed:
+        st.session_state['last_filters'] = current_filters
+        st.session_state['filters_applied'] = True
+        st.session_state['pagination_offset'] = 0
+
+    # APPLICATION DES FILTRES
     df_filtre = df_data.copy()
     
-    # FILTRE EMPLOYÉ 
     if employe_filtre != 'Tous' and 'AssigneeFullName' in df_filtre.columns:
         df_filtre = df_filtre[df_filtre['AssigneeFullName'] == employe_filtre]
     
-    # FILTRE TYPE D'ANOMALIE 
     if type_filtre != 'Tous' and 'Statut' in df_filtre.columns:
         df_filtre = df_filtre[df_filtre['Statut'] == type_filtre]
     
-    # FILTRE DATE 
     if date_filtre and 'DateCreation' in df_filtre.columns:
         try:
-            # Convertir en datetime et comparer les dates seulement
             df_filtre['DateCreation_dt'] = pd.to_datetime(df_filtre['DateCreation'])
             df_filtre = df_filtre[df_filtre['DateCreation_dt'].dt.date == date_filtre]
-        except:
-            pass
-    
-    # Préparer les données pour l'affichage filtré
+        except Exception as e:
+            print(f"Erreur filtrage date: {e}")
+
+    # PRÉPARATION AFFICHAGE FILTRÉ
     if not df_filtre.empty:
-        # Conserver l'index original pour l'alignement
         df_display_filtre = df_display_final.loc[df_filtre.index]
     else:
-        # Si aucun résultat, créer un DataFrame vide avec les mêmes colonnes
         df_display_filtre = pd.DataFrame(columns=df_display_final.columns)
 
-    # Statistiques - UTILISER df_filtre CORRECTEMENT
+    # STATISTIQUES
     total_tickets = len(df_filtre)
     
     if 'TempsHeures' in df_filtre.columns and not df_filtre.empty:
@@ -208,7 +257,6 @@ def render():
         temps_moyen = 0
         ecart_type = 0
     
-    # CORRECTION : Afficher les statistiques au bon endroit
     st.markdown(f"""
     <div style='display: flex; justify-content: space-between; margin: 20px 0 20px 0; padding: 15px; background-color: #f8f9fa; border-radius: 8px; border: 1px solid #dee2e6;'>
         <div style='text-align: center; flex: 1;'>
@@ -275,7 +323,7 @@ def render():
             except Exception as e:
                 st.error(f"Erreur export {export_format}: {str(e)}")
 
-    # Affichage du tableau
+    # AFFICHAGE TABLEAU
     if not df_display_filtre.empty:
         LINES_PER_PAGE = 50
         total_lines = len(df_display_filtre)
@@ -303,7 +351,7 @@ def render():
         
         st.markdown(df_page.to_html(escape=False, index=False), unsafe_allow_html=True)
         
-        # Pagination
+        # PAGINATION
         nav_col1, nav_col2, nav_col3 = st.columns([1, 2, 1])
 
         with nav_col1:
